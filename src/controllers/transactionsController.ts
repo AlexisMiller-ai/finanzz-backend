@@ -26,7 +26,15 @@ export const getTransactions = async (req: Request, res: Response) => {
 };
 
 export const createTransaction = async (req: Request, res: Response) => {
-  const { amount, type, category_id, description, date } = req.body;
+  const {
+    amount,
+    type,
+    category_id,
+    description,
+    date,
+    purchase_date,
+    payment_method,
+  } = req.body;
 
   if (!amount || !type || !date) {
     return res
@@ -39,9 +47,17 @@ export const createTransaction = async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO transactions (amount, type, category_id, description, date)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [amount, type, category_id || null, description || null, date],
+      `INSERT INTO transactions (amount, type, category_id, description, date, purchase_date, payment_method)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        amount,
+        type,
+        category_id || null,
+        description || null,
+        date,
+        purchase_date || date,
+        payment_method || "dinheiro",
+      ],
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -54,14 +70,32 @@ export const createTransaction = async (req: Request, res: Response) => {
 
 export const updateTransaction = async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { amount, type, category_id, description, date } = req.body;
+  const {
+    amount,
+    type,
+    category_id,
+    description,
+    date,
+    purchase_date,
+    payment_method,
+  } = req.body;
 
   try {
     const result = await pool.query(
       `UPDATE transactions
-       SET amount = $1, type = $2, category_id = $3, description = $4, date = $5
-       WHERE id = $6 RETURNING *`,
-      [amount, type, category_id || null, description || null, date, id],
+       SET amount = $1, type = $2, category_id = $3, description = $4, date = $5,
+           purchase_date = $6, payment_method = $7
+       WHERE id = $8 RETURNING *`,
+      [
+        amount,
+        type,
+        category_id || null,
+        description || null,
+        date,
+        purchase_date || date,
+        payment_method || "dinheiro",
+        id,
+      ],
     );
 
     if (result.rows.length === 0) {
