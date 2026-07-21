@@ -7,6 +7,7 @@ import categoriesRoutes from "./routes/categories";
 import transactionsRoutes from "./routes/transactions";
 import dashboardRoutes from "./routes/dashboard";
 import budgetsRoutes from "./routes/budgets";
+import { authenticate } from "./middleware/auth";
 
 dotenv.config();
 
@@ -21,11 +22,10 @@ app.use((req, res, next) => {
 
 app.use("/auth", authRoutes);
 
-// Ainda sem proteção — vamos ativar depois que você migrar seus dados
-app.use("/categories", categoriesRoutes);
-app.use("/transactions", transactionsRoutes);
-app.use("/dashboard", dashboardRoutes);
-app.use("/budgets", budgetsRoutes);
+app.use("/categories", authenticate, categoriesRoutes);
+app.use("/transactions", authenticate, transactionsRoutes);
+app.use("/dashboard", authenticate, dashboardRoutes);
+app.use("/budgets", authenticate, budgetsRoutes);
 
 app.get("/health", async (req, res) => {
   try {
