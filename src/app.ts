@@ -14,8 +14,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 app.use("/auth", authRoutes);
 
+// Ainda sem proteção — vamos ativar depois que você migrar seus dados
 app.use("/categories", categoriesRoutes);
 app.use("/transactions", transactionsRoutes);
 app.use("/dashboard", dashboardRoutes);
