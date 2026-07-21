@@ -1,8 +1,9 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import { pool } from "../config/db";
+import { AuthRequest } from "../middleware/auth";
 
-export const getBudgets = async (req: Request, res: Response) => {
-  const { month } = req.query; // formato esperado: "2026-06"
+export const getBudgets = async (req: AuthRequest, res: Response) => {
+  const { month } = req.query;
 
   if (!month) {
     return res
@@ -28,11 +29,12 @@ export const getBudgets = async (req: Request, res: Response) => {
        LEFT JOIN transactions t
          ON t.category_id = b.category_id
          AND t.type = 'despesa'
+         AND t.user_id = $1
          AND t.date >= b.month_ref AND t.date < (b.month_ref + INTERVAL '1 month')
-       WHERE b.month_ref = $1::date
+       WHERE b.month_ref = $2::date AND b.user_id = $1
        GROUP BY b.id, b.category_id, c.name, c.color, b.month_ref, b.limit_amount
        ORDER BY c.name`,
-      [`${month}-01`],
+      [req.userId, `${month}-01`],
     );
 
     const budgets = result.rows.map((row) => {
@@ -60,7 +62,7 @@ export const getBudgets = async (req: Request, res: Response) => {
   }
 };
 
-export const createBudget = async (req: Request, res: Response) => {
+export const createBudget = async (req: AuthRequest, res: Response) => {
   const { category_id, month_ref, limit_amount } = req.body;
 
   if (!category_id || !month_ref || !limit_amount) {
@@ -74,12 +76,12 @@ export const createBudget = async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO budgets (category_id, month_ref, limit_amount)
-       VALUES ($1, $2, $3)
+      `INSERT INTO budgets (category_id, month_ref, limit_amount, user_id)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (category_id, month_ref)
        DO UPDATE SET limit_amount = $3
        RETURNING *`,
-      [category_id, month_ref, limit_amount],
+      [category_id, month_ref, limit_amount, req.userId],
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -90,11 +92,14 @@ export const createBudget = async (req: Request, res: Response) => {
   }
 };
 
-export const deleteBudget = async (req: Request, res: Response) => {
+export const deleteBudget = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
 
   try {
-    await pool.query("DELETE FROM budgets WHERE id = $1", [id]);
+    await pool.query("DELETE FROM budgets WHERE id = $1 AND user_id = $2", [
+      id,
+      req.userId,
+    ]);
     res.status(204).send();
   } catch (error) {
     console.error(error);

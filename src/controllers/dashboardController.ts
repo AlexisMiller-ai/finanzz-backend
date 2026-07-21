@@ -1,8 +1,9 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import { pool } from "../config/db";
+import { AuthRequest } from "../middleware/auth";
 
-export const getSummary = async (req: Request, res: Response) => {
-  const { month } = req.query; // formato esperado: "2026-06"
+export const getSummary = async (req: AuthRequest, res: Response) => {
+  const { month } = req.query;
 
   if (!month) {
     return res
@@ -14,14 +15,13 @@ export const getSummary = async (req: Request, res: Response) => {
   }
 
   try {
-    // Entradas e saídas DO MÊS filtrado
     const periodResult = await pool.query(
       `SELECT
         COALESCE(SUM(CASE WHEN type = 'receita' THEN amount END), 0) AS entradas,
         COALESCE(SUM(CASE WHEN type = 'despesa' THEN amount END), 0) AS saidas
        FROM transactions
-       WHERE date >= $1::date AND date < ($1::date + INTERVAL '1 month')`,
-      [`${month}-01`],
+       WHERE user_id = $1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month')`,
+      [req.userId, `${month}-01`],
     );
 
     const entradas = parseFloat(periodResult.rows[0].entradas);
@@ -29,12 +29,13 @@ export const getSummary = async (req: Request, res: Response) => {
     const saldoPeriodo = entradas - saidas;
     const taxaEconomia = entradas > 0 ? (saldoPeriodo / entradas) * 100 : 0;
 
-    // Saldo GERAL acumulado (todos os meses, desde o início)
     const totalResult = await pool.query(
       `SELECT
         COALESCE(SUM(CASE WHEN type = 'receita' THEN amount END), 0) AS total_entradas,
         COALESCE(SUM(CASE WHEN type = 'despesa' THEN amount END), 0) AS total_saidas
-       FROM transactions`,
+       FROM transactions
+       WHERE user_id = $1`,
+      [req.userId],
     );
 
     const totalEntradas = parseFloat(totalResult.rows[0].total_entradas);
@@ -59,7 +60,7 @@ export const getSummary = async (req: Request, res: Response) => {
   }
 };
 
-export const getDistribution = async (req: Request, res: Response) => {
+export const getDistribution = async (req: AuthRequest, res: Response) => {
   const { month } = req.query;
 
   if (!month) {
@@ -82,11 +83,13 @@ export const getDistribution = async (req: Request, res: Response) => {
        LEFT JOIN transactions t
          ON t.category_id = c.id
          AND t.type = 'despesa'
-         AND t.date >= $1::date AND t.date < ($1::date + INTERVAL '1 month')
+         AND t.user_id = $1
+         AND t.date >= $2::date AND t.date < ($2::date + INTERVAL '1 month')
+       WHERE c.user_id = $1
        GROUP BY c.id, c.name, c.color
        HAVING COALESCE(SUM(t.amount), 0) > 0
        ORDER BY total DESC`,
-      [`${month}-01`],
+      [req.userId, `${month}-01`],
     );
 
     const totalGeral = result.rows.reduce(

@@ -1,15 +1,16 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import { pool } from "../config/db";
+import { AuthRequest } from "../middleware/auth";
 
-export const getTransactions = async (req: Request, res: Response) => {
-  const { month } = req.query; // formato esperado: "2026-06"
+export const getTransactions = async (req: AuthRequest, res: Response) => {
+  const { month } = req.query;
 
   try {
-    let query = "SELECT * FROM transactions";
-    const params: any[] = [];
+    let query = "SELECT * FROM transactions WHERE user_id = $1";
+    const params: any[] = [req.userId];
 
     if (month) {
-      query += ` WHERE date >= $1 AND date < ($1::date + INTERVAL '1 month')`;
+      query += ` AND date >= $2::date AND date < ($2::date + INTERVAL '1 month')`;
       params.push(`${month}-01`);
     }
 
@@ -25,7 +26,7 @@ export const getTransactions = async (req: Request, res: Response) => {
   }
 };
 
-export const createTransaction = async (req: Request, res: Response) => {
+export const createTransaction = async (req: AuthRequest, res: Response) => {
   const {
     amount,
     type,
@@ -47,8 +48,8 @@ export const createTransaction = async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO transactions (amount, type, category_id, description, date, purchase_date, payment_method)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      `INSERT INTO transactions (amount, type, category_id, description, date, purchase_date, payment_method, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [
         amount,
         type,
@@ -57,6 +58,7 @@ export const createTransaction = async (req: Request, res: Response) => {
         date,
         purchase_date || date,
         payment_method || "dinheiro",
+        req.userId,
       ],
     );
     res.status(201).json(result.rows[0]);
@@ -68,7 +70,7 @@ export const createTransaction = async (req: Request, res: Response) => {
   }
 };
 
-export const updateTransaction = async (req: Request, res: Response) => {
+export const updateTransaction = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   const {
     amount,
@@ -85,7 +87,7 @@ export const updateTransaction = async (req: Request, res: Response) => {
       `UPDATE transactions
        SET amount = $1, type = $2, category_id = $3, description = $4, date = $5,
            purchase_date = $6, payment_method = $7
-       WHERE id = $8 RETURNING *`,
+       WHERE id = $8 AND user_id = $9 RETURNING *`,
       [
         amount,
         type,
@@ -95,6 +97,7 @@ export const updateTransaction = async (req: Request, res: Response) => {
         purchase_date || date,
         payment_method || "dinheiro",
         id,
+        req.userId,
       ],
     );
 
@@ -113,11 +116,14 @@ export const updateTransaction = async (req: Request, res: Response) => {
   }
 };
 
-export const deleteTransaction = async (req: Request, res: Response) => {
+export const deleteTransaction = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
 
   try {
-    await pool.query("DELETE FROM transactions WHERE id = $1", [id]);
+    await pool.query(
+      "DELETE FROM transactions WHERE id = $1 AND user_id = $2",
+      [id, req.userId],
+    );
     res.status(204).send();
   } catch (error) {
     console.error(error);
