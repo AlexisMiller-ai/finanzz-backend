@@ -5,6 +5,8 @@ import { AuthRequest } from "../middleware/auth";
 export const getTransactions = async (req: AuthRequest, res: Response) => {
   const { month } = req.query;
 
+  console.log("DEBUG userId:", req.userId, typeof req.userId); // linha temporária
+
   try {
     let query = "SELECT * FROM transactions WHERE user_id = $1";
     const params: any[] = [req.userId];
@@ -16,7 +18,12 @@ export const getTransactions = async (req: AuthRequest, res: Response) => {
 
     query += " ORDER BY date DESC, id DESC";
 
+    console.log("DEBUG query:", query, params); // linha temporária
+
     const result = await pool.query(query, params);
+
+    console.log("DEBUG resultado:", result.rows.length, "linhas"); // linha temporária
+
     res.json(result.rows);
   } catch (error) {
     console.error(error);
