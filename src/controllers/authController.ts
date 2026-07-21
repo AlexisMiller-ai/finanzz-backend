@@ -3,6 +3,17 @@ import bcrypt from "bcryptjs";
 import { pool } from "../config/db";
 import { generateToken } from "../config/jwt";
 
+const DEFAULT_CATEGORIES = [
+  { name: "Alimentação", type: "despesa", color: "#EF4444" },
+  { name: "Moradia", type: "despesa", color: "#3B82F6" },
+  { name: "Transporte", type: "despesa", color: "#F59E0B" },
+  { name: "Saúde", type: "despesa", color: "#10B981" },
+  { name: "Lazer & Viagem", type: "despesa", color: "#8B5CF6" },
+  { name: "Salário", type: "receita", color: "#16A34A" },
+  { name: "Freelance", type: "receita", color: "#0EA5E9" },
+  { name: "Outras Receitas", type: "receita", color: "#22C55E" },
+];
+
 export const register = async (req: Request, res: Response) => {
   const { name, email, password } = req.body;
 
@@ -33,6 +44,15 @@ export const register = async (req: Request, res: Response) => {
     );
 
     const user = result.rows[0];
+
+    // Cria categorias padrão para o novo usuário
+    for (const category of DEFAULT_CATEGORIES) {
+      await pool.query(
+        "INSERT INTO categories (name, type, color, user_id) VALUES ($1, $2, $3, $4)",
+        [category.name, category.type, category.color, user.id],
+      );
+    }
+
     const token = generateToken(user.id);
 
     res.status(201).json({ user, token });
