@@ -1,9 +1,13 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import { pool } from "../config/db";
+import { AuthRequest } from "../middleware/auth";
 
-export const getCategories = async (req: Request, res: Response) => {
+export const getCategories = async (req: AuthRequest, res: Response) => {
   try {
-    const result = await pool.query("SELECT * FROM categories ORDER BY id");
+    const result = await pool.query(
+      "SELECT * FROM categories WHERE user_id = $1 ORDER BY id",
+      [req.userId],
+    );
     res.json(result.rows);
   } catch (error) {
     console.error(error);
@@ -13,7 +17,7 @@ export const getCategories = async (req: Request, res: Response) => {
   }
 };
 
-export const createCategory = async (req: Request, res: Response) => {
+export const createCategory = async (req: AuthRequest, res: Response) => {
   const { name, type, color } = req.body;
 
   if (!name || !type || !color) {
@@ -27,8 +31,8 @@ export const createCategory = async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      "INSERT INTO categories (name, type, color) VALUES ($1, $2, $3) RETURNING *",
-      [name, type, color],
+      "INSERT INTO categories (name, type, color, user_id) VALUES ($1, $2, $3, $4) RETURNING *",
+      [name, type, color, req.userId],
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -39,11 +43,14 @@ export const createCategory = async (req: Request, res: Response) => {
   }
 };
 
-export const deleteCategory = async (req: Request, res: Response) => {
+export const deleteCategory = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
 
   try {
-    await pool.query("DELETE FROM categories WHERE id = $1", [id]);
+    await pool.query("DELETE FROM categories WHERE id = $1 AND user_id = $2", [
+      id,
+      req.userId,
+    ]);
     res.status(204).send();
   } catch (error) {
     console.error(error);
