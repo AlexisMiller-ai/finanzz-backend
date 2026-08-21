@@ -7,6 +7,7 @@ import categoriesRoutes from "./routes/categories";
 import transactionsRoutes from "./routes/transactions";
 import dashboardRoutes from "./routes/dashboard";
 import budgetsRoutes from "./routes/budgets";
+import goalsRoutes from "./routes/goals";
 import { authenticate } from "./middleware/auth";
 
 dotenv.config();
@@ -26,6 +27,7 @@ app.use("/categories", authenticate, categoriesRoutes);
 app.use("/transactions", authenticate, transactionsRoutes);
 app.use("/dashboard", authenticate, dashboardRoutes);
 app.use("/budgets", authenticate, budgetsRoutes);
+app.use("/goals", authenticate, goalsRoutes);
 
 app.get("/health", async (req, res) => {
   try {

@@ -42,12 +42,23 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
     const totalSaidas = parseFloat(totalResult.rows[0].total_saidas);
     const saldoGeral = totalEntradas - totalSaidas;
 
+    const goalResult = await pool.query(
+      "SELECT savings_goal FROM monthly_goals WHERE user_id = $1 AND month_ref = $2::date",
+      [req.userId, `${month}-01`],
+    );
+    const savingsGoal = goalResult.rows[0]
+      ? parseFloat(goalResult.rows[0].savings_goal)
+      : 0;
+    const availableToSpend = entradas - savingsGoal - saidas;
+
     res.json({
       saldoGeralAcumulado: saldoGeral,
       entradasPeriodo: entradas,
       saidasPeriodo: saidas,
       saldoPeriodo,
       taxaEconomia: parseFloat(taxaEconomia.toFixed(1)),
+      savingsGoal,
+      availableToSpend,
     });
   } catch (error) {
     console.error(error);
