@@ -8,6 +8,7 @@ import transactionsRoutes from "./routes/transactions";
 import dashboardRoutes from "./routes/dashboard";
 import budgetsRoutes from "./routes/budgets";
 import goalsRoutes from "./routes/goals";
+import savingsRoutes from "./routes/savings";
 import { authenticate } from "./middleware/auth";
 
 dotenv.config();
@@ -28,6 +29,7 @@ app.use("/transactions", authenticate, transactionsRoutes);
 app.use("/dashboard", authenticate, dashboardRoutes);
 app.use("/budgets", authenticate, budgetsRoutes);
 app.use("/goals", authenticate, goalsRoutes);
+app.use("/savings", authenticate, savingsRoutes);
 
 app.get("/health", async (req, res) => {
   try {

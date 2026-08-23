@@ -6,10 +6,12 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
   const { month } = req.query;
 
   if (!month) {
-    return res.status(400).json({
-      status: "error",
-      message: 'Parâmetro "month" é obrigatório (ex: 2026-06)',
-    });
+    return res
+      .status(400)
+      .json({
+        status: "error",
+        message: 'Parâmetro "month" é obrigatório (ex: 2026-06)',
+      });
   }
 
   try {
@@ -29,16 +31,25 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
 
     const totalResult = await pool.query(
       `SELECT
-    COALESCE(SUM(CASE WHEN type = 'receita' THEN amount END), 0) AS total_entradas,
-    COALESCE(SUM(CASE WHEN type = 'despesa' THEN amount END), 0) AS total_saidas
-   FROM transactions
-   WHERE user_id = $1 AND date >= '2026-08-01'::date`,
+        COALESCE(SUM(CASE WHEN type = 'receita' THEN amount END), 0) AS total_entradas,
+        COALESCE(SUM(CASE WHEN type = 'despesa' THEN amount END), 0) AS total_saidas
+       FROM transactions
+       WHERE user_id = $1 AND date >= '2026-08-01'::date`,
       [req.userId],
     );
 
     const totalEntradas = parseFloat(totalResult.rows[0].total_entradas);
     const totalSaidas = parseFloat(totalResult.rows[0].total_saidas);
-    const saldoGeral = totalEntradas - totalSaidas;
+
+    const userResult = await pool.query(
+      "SELECT savings_adjustment FROM users WHERE id = $1",
+      [req.userId],
+    );
+    const savingsAdjustment = parseFloat(
+      userResult.rows[0]?.savings_adjustment || 0,
+    );
+
+    const saldoGeral = totalEntradas - totalSaidas + savingsAdjustment;
 
     const goalResult = await pool.query(
       "SELECT savings_goal FROM monthly_goals WHERE user_id = $1 AND month_ref = $2::date",
@@ -60,10 +71,12 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({
-      status: "error",
-      message: "Erro ao calcular resumo do dashboard",
-    });
+    res
+      .status(500)
+      .json({
+        status: "error",
+        message: "Erro ao calcular resumo do dashboard",
+      });
   }
 };
 
@@ -71,10 +84,12 @@ export const getDistribution = async (req: AuthRequest, res: Response) => {
   const { month } = req.query;
 
   if (!month) {
-    return res.status(400).json({
-      status: "error",
-      message: 'Parâmetro "month" é obrigatório (ex: 2026-06)',
-    });
+    return res
+      .status(400)
+      .json({
+        status: "error",
+        message: 'Parâmetro "month" é obrigatório (ex: 2026-06)',
+      });
   }
 
   try {
@@ -116,9 +131,11 @@ export const getDistribution = async (req: AuthRequest, res: Response) => {
     res.json(distribution);
   } catch (error) {
     console.error(error);
-    res.status(500).json({
-      status: "error",
-      message: "Erro ao calcular distribuição por categoria",
-    });
+    res
+      .status(500)
+      .json({
+        status: "error",
+        message: "Erro ao calcular distribuição por categoria",
+      });
   }
 };
