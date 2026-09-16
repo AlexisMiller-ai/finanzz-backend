@@ -11,8 +11,8 @@ const router = Router();
 
 router.get("/", getTransactions);
 router.post("/", createTransaction);
-router.put("/:id", updateTransaction);
+router.put("/:id", updateTransaction); // body.scope: single | future | all
 router.delete("/group/:groupId", deleteInstallmentGroup);
-router.delete("/:id", deleteTransaction);
+router.delete("/:id", deleteTransaction); // ?scope=single | future | all
 
 export default router;

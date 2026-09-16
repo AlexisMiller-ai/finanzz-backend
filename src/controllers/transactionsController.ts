@@ -1,211 +1,369 @@
 import { Response } from "express";
 import crypto from "crypto";
-import { pool } from "../config/db";
+import { PoolClient } from "pg";
+import { pool, withTransaction } from "../config/db";
 import { AuthRequest } from "../middleware/auth";
+import {
+  PAYMENT_METHODS,
+  PaymentMethod,
+  TRANSACTION_TYPES,
+  TransactionType,
+  addMonths,
+  centsToDecimal,
+  cleanText,
+  isOneOf,
+  parseDate,
+  parseMonth,
+  sendError,
+  toCents,
+} from "../utils/validation";
 
-function addMonths(dateStr: string, months: number): string {
-  const parts = dateStr.split("-").map(Number);
-  const y = parts[0] ?? 1970;
-  const m = parts[1] ?? 1;
-  const d = parts[2] ?? 1;
-  const date = new Date(Date.UTC(y, m - 1 + months, d));
-  const newYear = date.getUTCFullYear();
-  const newMonth = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const newDay = String(date.getUTCDate()).padStart(2, "0");
-  return `${newYear}-${newMonth}-${newDay}`;
+const MAX_INSTALLMENTS = 72;
+const MAX_REPEAT_MONTHS = 60;
+const DESCRIPTION_MAX = 240; // coluna tem 255; sobra espaço para o sufixo " (12/12)"
+const INSTALLMENT_SUFFIX = /\s*\(\d+\/\d+\)$/;
+
+type Scope = "single" | "future" | "all";
+
+const SELECT_WITH_CATEGORY = `
+  SELECT t.*, c.name AS category_name, c.color AS category_color
+  FROM transactions t
+  LEFT JOIN categories c ON c.id = t.category_id`;
+
+interface TransactionInput {
+  cents: number;
+  type: TransactionType;
+  categoryId: number | null;
+  description: string | null;
+  date: string;
+  purchaseDate: string;
+  paymentMethod: PaymentMethod;
+}
+
+/** Valida o corpo da requisição. Devolve a mensagem de erro ou os dados limpos. */
+async function parseInput(
+  req: AuthRequest,
+): Promise<{ error: string } | { data: TransactionInput }> {
+  const body = req.body ?? {};
+  const cents = toCents(body.amount);
+  if (cents === null) return { error: "Informe um valor maior que zero" };
+
+  if (!isOneOf(TRANSACTION_TYPES, body.type)) {
+    return { error: "Tipo inválido (use despesa ou receita)" };
+  }
+  const type = body.type;
+
+  const date = parseDate(body.date);
+  if (!date) return { error: "Data inválida" };
+
+  let paymentMethod: PaymentMethod = isOneOf(PAYMENT_METHODS, body.payment_method)
+    ? body.payment_method
+    : "dinheiro";
+  // Receita no cartão de crédito não faz sentido e mudava a data para o dia 1º da fatura.
+  if (type === "receita" && paymentMethod === "credito") paymentMethod = "dinheiro";
+
+  const purchaseDate =
+    paymentMethod === "credito" ? (parseDate(body.purchase_date) ?? date) : date;
+
+  let categoryId: number | null = null;
+  if (body.category_id !== null && body.category_id !== undefined && body.category_id !== "") {
+    categoryId = Number(body.category_id);
+    const category = await pool.query(
+      "SELECT type FROM categories WHERE id = $1 AND user_id = $2",
+      [categoryId, req.userId],
+    );
+    if (!category.rows[0]) return { error: "Categoria não encontrada" };
+    if (category.rows[0].type !== type) {
+      return { error: "A categoria escolhida não é do mesmo tipo do lançamento" };
+    }
+  }
+
+  const description = cleanText(body.description, DESCRIPTION_MAX)?.replace(
+    INSTALLMENT_SUFFIX,
+    "",
+  ) || null;
+
+  return {
+    data: { cents, type, categoryId, description, date, purchaseDate, paymentMethod },
+  };
+}
+
+function installmentDescription(base: string | null, n: number, total: number) {
+  return base ? `${base} (${n}/${total})` : `(${n}/${total})`;
+}
+
+async function insertRow(
+  client: PoolClient,
+  userId: number | undefined,
+  input: TransactionInput,
+  extra: {
+    installmentGroupId?: string;
+    installmentNumber?: number;
+    installmentTotal?: number;
+    recurrenceId?: string;
+  } = {},
+) {
+  const result = await client.query(
+    `INSERT INTO transactions
+      (amount, type, category_id, description, date, purchase_date, payment_method, user_id,
+       installment_group_id, installment_number, installment_total, recurrence_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    [
+      centsToDecimal(input.cents),
+      input.type,
+      input.categoryId,
+      input.description,
+      input.date,
+      input.purchaseDate,
+      input.paymentMethod,
+      userId,
+      extra.installmentGroupId ?? null,
+      extra.installmentNumber ?? null,
+      extra.installmentTotal ?? null,
+      extra.recurrenceId ?? null,
+    ],
+  );
+  return result.rows[0];
 }
 
 export const getTransactions = async (req: AuthRequest, res: Response) => {
-  const { month } = req.query;
+  const params: unknown[] = [req.userId];
+  let where = "WHERE t.user_id = $1";
+
+  if (req.query.month !== undefined) {
+    const monthStart = parseMonth(req.query.month);
+    if (!monthStart) {
+      return sendError(res, 400, 'Parâmetro "month" inválido (ex: 2026-06)');
+    }
+    params.push(monthStart);
+    where += " AND t.date >= $2::date AND t.date < ($2::date + INTERVAL '1 month')";
+  }
 
   try {
-    let query = "SELECT * FROM transactions WHERE user_id = $1";
-    const params: any[] = [req.userId];
-
-    if (month) {
-      query += ` AND date >= $2::date AND date < ($2::date + INTERVAL '1 month')`;
-      params.push(`${month}-01`);
-    }
-
-    query += " ORDER BY date DESC, id DESC";
-
-    const result = await pool.query(query, params);
+    const result = await pool.query(
+      `${SELECT_WITH_CATEGORY} ${where} ORDER BY t.date DESC, t.id DESC`,
+      params,
+    );
     res.json(result.rows);
   } catch (error) {
     console.error(error);
-    res
-      .status(500)
-      .json({ status: "error", message: "Erro ao buscar lançamentos" });
+    sendError(res, 500, "Erro ao buscar lançamentos");
   }
 };
 
 export const createTransaction = async (req: AuthRequest, res: Response) => {
-  const {
-    amount,
-    type,
-    category_id,
-    description,
-    date,
-    purchase_date,
-    payment_method,
-    is_installment,
-    installments,
-  } = req.body;
+  const parsed = await parseInput(req).catch((error) => {
+    console.error(error);
+    return { error: "Erro ao validar lançamento" };
+  });
+  if ("error" in parsed) return sendError(res, 400, parsed.error);
+  const input = parsed.data;
 
-  if (!amount || !type || !date) {
-    return res.status(400).json({
-      status: "error",
-      message: "Campos obrigatórios: amount, type, date",
-    });
+  const installments = Number(req.body.installments ?? 0);
+  const wantsInstallments = !!req.body.is_installment && installments > 1;
+  const repeatMonths = Number(req.body.repeat_months ?? 0);
+  const wantsRecurrence = repeatMonths > 1;
+
+  if (wantsInstallments && wantsRecurrence) {
+    return sendError(res, 400, "Escolha parcelamento ou repetição, não os dois");
+  }
+  if (wantsInstallments) {
+    if (input.type !== "despesa") {
+      return sendError(res, 400, "Somente despesas podem ser parceladas");
+    }
+    if (!Number.isInteger(installments) || installments > MAX_INSTALLMENTS) {
+      return sendError(res, 400, `Parcelas devem ser entre 2 e ${MAX_INSTALLMENTS}`);
+    }
+    if (input.cents < installments) {
+      return sendError(res, 400, "Valor muito baixo para esse número de parcelas");
+    }
+  }
+  if (wantsRecurrence && (!Number.isInteger(repeatMonths) || repeatMonths > MAX_REPEAT_MONTHS)) {
+    return sendError(res, 400, `Repetição deve ser entre 2 e ${MAX_REPEAT_MONTHS} meses`);
   }
 
   try {
-    // Fluxo de compra parcelada
-    if (is_installment && installments && Number(installments) > 1) {
-      const total = parseFloat(amount);
-      const count = parseInt(installments, 10);
-      const baseValue = Math.floor((total / count) * 100) / 100;
-      const roundedSum = baseValue * count;
-      const remainder = Math.round((total - roundedSum) * 100) / 100;
-
-      const groupId = crypto.randomUUID();
-      const createdRows = [];
-
-      for (let i = 1; i <= count; i++) {
-        const installmentAmount =
-          i === count ? baseValue + remainder : baseValue;
-        const installmentDate = addMonths(date, i - 1);
-        const installmentDescription = description
-          ? `${description} (${i}/${count})`
-          : `(${i}/${count})`;
-
-        const result = await pool.query(
-          `INSERT INTO transactions
-            (amount, type, category_id, description, date, purchase_date, payment_method, user_id, installment_group_id, installment_number, installment_total)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-          [
-            installmentAmount,
-            type,
-            category_id || null,
-            installmentDescription,
-            installmentDate,
-            purchase_date || date,
-            payment_method || "dinheiro",
-            req.userId,
-            groupId,
-            i,
-            count,
-          ],
-        );
-        createdRows.push(result.rows[0]);
+    const rows = await withTransaction(async (client) => {
+      if (wantsInstallments) {
+        // Divide em centavos para a soma das parcelas bater exatamente com o total.
+        const base = Math.floor(input.cents / installments);
+        const remainder = input.cents - base * installments;
+        const groupId = crypto.randomUUID();
+        const created = [];
+        for (let i = 1; i <= installments; i++) {
+          created.push(
+            await insertRow(
+              client,
+              req.userId,
+              {
+                ...input,
+                cents: i === installments ? base + remainder : base,
+                description: installmentDescription(input.description, i, installments),
+                date: addMonths(input.date, i - 1),
+              },
+              {
+                installmentGroupId: groupId,
+                installmentNumber: i,
+                installmentTotal: installments,
+              },
+            ),
+          );
+        }
+        return created;
       }
 
-      return res.status(201).json({ installments: createdRows });
-    }
+      if (wantsRecurrence) {
+        const recurrenceId = crypto.randomUUID();
+        const created = [];
+        for (let i = 0; i < repeatMonths; i++) {
+          created.push(
+            await insertRow(
+              client,
+              req.userId,
+              {
+                ...input,
+                date: addMonths(input.date, i),
+                purchaseDate: addMonths(input.purchaseDate, i),
+              },
+              { recurrenceId },
+            ),
+          );
+        }
+        return created;
+      }
 
-    // Fluxo normal (sem parcelamento)
-    const result = await pool.query(
-      `INSERT INTO transactions (amount, type, category_id, description, date, purchase_date, payment_method, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [
-        amount,
-        type,
-        category_id || null,
-        description || null,
-        date,
-        purchase_date || date,
-        payment_method || "dinheiro",
-        req.userId,
-      ],
-    );
-    res.status(201).json(result.rows[0]);
+      return [await insertRow(client, req.userId, input)];
+    });
+
+    res.status(201).json({ transactions: rows });
   } catch (error) {
     console.error(error);
-    res
-      .status(500)
-      .json({ status: "error", message: "Erro ao criar lançamento" });
+    sendError(res, 500, "Erro ao criar lançamento");
   }
 };
 
+function parseScope(value: unknown): Scope {
+  return value === "future" || value === "all" ? value : "single";
+}
+
+/** Busca o lançamento e monta o filtro SQL do escopo (só ele, ele e os próximos, ou a série toda). */
+async function resolveScope(req: AuthRequest, scope: Scope) {
+  const result = await pool.query(
+    "SELECT * FROM transactions WHERE id = $1 AND user_id = $2",
+    [req.params.id, req.userId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+
+  const groupColumn = row.installment_group_id
+    ? "installment_group_id"
+    : row.recurrence_id
+      ? "recurrence_id"
+      : null;
+
+  if (scope === "single" || !groupColumn) {
+    return { row, where: "id = $1 AND user_id = $2", params: [row.id, req.userId] };
+  }
+
+  const groupId = row[groupColumn];
+  if (scope === "all") {
+    return {
+      row,
+      where: `${groupColumn} = $1 AND user_id = $2`,
+      params: [groupId, req.userId],
+    };
+  }
+  return {
+    row,
+    where: `${groupColumn} = $1 AND user_id = $2 AND (date > $3 OR id = $4 OR (date = $3 AND id > $4))`,
+    params: [groupId, req.userId, row.date, row.id],
+  };
+}
+
 export const updateTransaction = async (req: AuthRequest, res: Response) => {
-  const { id } = req.params;
-  const {
-    amount,
-    type,
-    category_id,
-    description,
-    date,
-    purchase_date,
-    payment_method,
-  } = req.body;
+  const scope = parseScope(req.body?.scope);
 
   try {
-    const result = await pool.query(
-      `UPDATE transactions
-       SET amount = $1, type = $2, category_id = $3, description = $4, date = $5,
-           purchase_date = $6, payment_method = $7
-       WHERE id = $8 AND user_id = $9 RETURNING *`,
-      [
-        amount,
-        type,
-        category_id || null,
-        description || null,
-        date,
-        purchase_date || date,
-        payment_method || "dinheiro",
-        id,
-        req.userId,
-      ],
-    );
+    const parsed = await parseInput(req);
+    if ("error" in parsed) return sendError(res, 400, parsed.error);
+    const input = parsed.data;
 
-    if (result.rows.length === 0) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Lançamento não encontrado" });
+    const target = await resolveScope(req, scope);
+    if (!target) return sendError(res, 404, "Lançamento não encontrado");
+
+    const values = [
+      centsToDecimal(input.cents),
+      input.type,
+      input.categoryId,
+      input.description,
+      input.paymentMethod,
+    ];
+    // Parcelas guardam o sufixo "(n/total)" na descrição.
+    const descriptionSql = `CASE WHEN installment_total IS NOT NULL
+        THEN CASE WHEN $4::text IS NULL THEN '(' || installment_number || '/' || installment_total || ')'
+                  ELSE $4::text || ' (' || installment_number || '/' || installment_total || ')' END
+        ELSE $4::text END`;
+
+    let sql: string;
+    let params: unknown[];
+    if (scope === "single" || target.where.startsWith("id =")) {
+      sql = `UPDATE transactions
+             SET amount = $1, type = $2, category_id = $3, description = ${descriptionSql},
+                 payment_method = $5, date = $6, purchase_date = $7
+             WHERE id = $8 AND user_id = $9 RETURNING *`;
+      params = [...values, input.date, input.purchaseDate, target.row.id, req.userId];
+    } else {
+      // Em lote as datas de cada mês são preservadas.
+      const shifted = target.where.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + 5}`);
+      sql = `UPDATE transactions
+             SET amount = $1, type = $2, category_id = $3, description = ${descriptionSql},
+                 payment_method = $5::varchar,
+                 purchase_date = CASE WHEN $5::varchar = 'credito' THEN COALESCE(purchase_date, date) ELSE date END
+             WHERE ${shifted} RETURNING *`;
+      params = [...values, ...target.params];
     }
 
-    res.json(result.rows[0]);
+    const result = await pool.query(sql, params);
+    res.json({ transactions: result.rows });
   } catch (error) {
     console.error(error);
-    res
-      .status(500)
-      .json({ status: "error", message: "Erro ao atualizar lançamento" });
+    sendError(res, 500, "Erro ao atualizar lançamento");
   }
 };
 
 export const deleteTransaction = async (req: AuthRequest, res: Response) => {
-  const { id } = req.params;
+  const scope = parseScope(req.query.scope);
 
   try {
-    await pool.query(
-      "DELETE FROM transactions WHERE id = $1 AND user_id = $2",
-      [id, req.userId],
+    const target = await resolveScope(req, scope);
+    if (!target) return sendError(res, 404, "Lançamento não encontrado");
+
+    const result = await pool.query(
+      `DELETE FROM transactions WHERE ${target.where}`,
+      target.params,
     );
-    res.status(204).send();
+    res.json({ deleted: result.rowCount });
   } catch (error) {
     console.error(error);
-    res
-      .status(500)
-      .json({ status: "error", message: "Erro ao excluir lançamento" });
+    sendError(res, 500, "Erro ao excluir lançamento");
   }
 };
 
-export const deleteInstallmentGroup = async (
-  req: AuthRequest,
-  res: Response,
-) => {
+/** Mantido por compatibilidade: exclui todas as parcelas de uma compra. */
+export const deleteInstallmentGroup = async (req: AuthRequest, res: Response) => {
   const { groupId } = req.params;
+  if (typeof groupId !== "string" || !/^[0-9a-f-]{36}$/i.test(groupId)) {
+    return sendError(res, 400, "Identificador de parcelamento inválido");
+  }
 
   try {
-    await pool.query(
+    const result = await pool.query(
       "DELETE FROM transactions WHERE installment_group_id = $1 AND user_id = $2",
       [groupId, req.userId],
     );
-    res.status(204).send();
+    res.json({ deleted: result.rowCount });
   } catch (error) {
     console.error(error);
-    res
-      .status(500)
-      .json({ status: "error", message: "Erro ao excluir parcelamento" });
+    sendError(res, 500, "Erro ao excluir parcelamento");
   }
 };
