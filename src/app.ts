@@ -10,12 +10,13 @@ import budgetsRoutes from "./routes/budgets";
 import goalsRoutes from "./routes/goals";
 import savingsRoutes from "./routes/savings";
 import { authenticate } from "./middleware/auth";
+import { sendError } from "./utils/validation";
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
 
 app.use((req, res, next) => {
   res.set("Cache-Control", "no-store");
@@ -42,5 +43,25 @@ app.get("/health", async (req, res) => {
       .json({ status: "error", message: "Falha ao conectar no banco" });
   }
 });
+
+app.use((req, res) => {
+  sendError(res, 404, "Rota não encontrada");
+});
+
+// JSON malformado e erros não tratados respondem em JSON, não em HTML.
+app.use(
+  (
+    error: Error & { type?: string },
+    req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    if (error.type === "entity.parse.failed") {
+      return sendError(res, 400, "JSON inválido");
+    }
+    console.error(error);
+    sendError(res, 500, "Erro interno");
+  },
+);
 
 export default app;

@@ -1,7 +1,9 @@
 import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
-import { pool } from "../config/db";
+import { pool, withTransaction } from "../config/db";
 import { generateToken } from "../config/jwt";
+import { AuthRequest } from "../middleware/auth";
+import { cleanText, sendError } from "../utils/validation";
 
 const DEFAULT_CATEGORIES = [
   { name: "Alimentação", type: "despesa", color: "#EF4444" },
@@ -9,115 +11,172 @@ const DEFAULT_CATEGORIES = [
   { name: "Transporte", type: "despesa", color: "#F59E0B" },
   { name: "Saúde", type: "despesa", color: "#10B981" },
   { name: "Lazer & Viagem", type: "despesa", color: "#8B5CF6" },
+  { name: "Assinaturas", type: "despesa", color: "#EC4899" },
+  { name: "Educação", type: "despesa", color: "#06B6D4" },
+  { name: "Compras", type: "despesa", color: "#F97316" },
   { name: "Salário", type: "receita", color: "#16A34A" },
   { name: "Freelance", type: "receita", color: "#0EA5E9" },
   { name: "Outras Receitas", type: "receita", color: "#22C55E" },
 ];
 
-export const register = async (req: Request, res: Response) => {
-  const { name, email, password } = req.body;
+const MIN_PASSWORD_LENGTH = 6;
 
-  if (!name || !email || !password) {
-    return res
-      .status(400)
-      .json({
-        status: "error",
-        message: "Campos obrigatórios: name, email, password",
-      });
+function normalizeEmail(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const email = value.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 150
+    ? email
+    : null;
+}
+
+export const register = async (req: Request, res: Response) => {
+  const name = cleanText(req.body?.name, 100);
+  const email = normalizeEmail(req.body?.email);
+  const password = req.body?.password;
+
+  if (!name || !email || typeof password !== "string") {
+    return sendError(res, 400, "Informe nome, e-mail válido e senha");
+  }
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return sendError(
+      res,
+      400,
+      `A senha precisa ter pelo menos ${MIN_PASSWORD_LENGTH} caracteres`,
+    );
   }
 
   try {
-    const existing = await pool.query("SELECT id FROM users WHERE email = $1", [
-      email,
-    ]);
+    const existing = await pool.query(
+      "SELECT id FROM users WHERE LOWER(email) = $1",
+      [email],
+    );
     if (existing.rows.length > 0) {
-      return res
-        .status(409)
-        .json({ status: "error", message: "Este e-mail já está cadastrado" });
+      return sendError(res, 409, "Este e-mail já está cadastrado");
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const result = await pool.query(
-      "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id, name, email",
-      [name, email, passwordHash],
-    );
-
-    const user = result.rows[0];
-
-    // Cria categorias padrão para o novo usuário
-    for (const category of DEFAULT_CATEGORIES) {
-      await pool.query(
-        "INSERT INTO categories (name, type, color, user_id) VALUES ($1, $2, $3, $4)",
-        [category.name, category.type, category.color, user.id],
+    const user = await withTransaction(async (client) => {
+      const result = await client.query(
+        "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id, name, email",
+        [name, email, passwordHash],
       );
-    }
+      const created = result.rows[0];
 
-    const token = generateToken(user.id);
+      for (const category of DEFAULT_CATEGORIES) {
+        await client.query(
+          "INSERT INTO categories (name, type, color, user_id) VALUES ($1, $2, $3, $4)",
+          [category.name, category.type, category.color, created.id],
+        );
+      }
+      return created;
+    });
 
-    res.status(201).json({ user, token });
+    res.status(201).json({ user, token: generateToken(user.id) });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ status: "error", message: "Erro ao criar conta" });
+    sendError(res, 500, "Erro ao criar conta");
   }
 };
 
 export const login = async (req: Request, res: Response) => {
-  const { email, password } = req.body;
+  const email = normalizeEmail(req.body?.email);
+  const password = req.body?.password;
 
-  if (!email || !password) {
-    return res
-      .status(400)
-      .json({ status: "error", message: "Informe e-mail e senha" });
+  if (!email || typeof password !== "string" || !password) {
+    return sendError(res, 400, "Informe e-mail e senha");
   }
 
   try {
-    const result = await pool.query("SELECT * FROM users WHERE email = $1", [
-      email,
-    ]);
+    const result = await pool.query(
+      "SELECT id, name, email, password_hash FROM users WHERE LOWER(email) = $1",
+      [email],
+    );
     const user = result.rows[0];
 
-    if (!user) {
-      return res
-        .status(401)
-        .json({ status: "error", message: "E-mail ou senha inválidos" });
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+      return sendError(res, 401, "E-mail ou senha inválidos");
     }
-
-    const validPassword = await bcrypt.compare(password, user.password_hash);
-    if (!validPassword) {
-      return res
-        .status(401)
-        .json({ status: "error", message: "E-mail ou senha inválidos" });
-    }
-
-    const token = generateToken(user.id);
 
     res.json({
       user: { id: user.id, name: user.name, email: user.email },
-      token,
+      token: generateToken(user.id),
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ status: "error", message: "Erro ao fazer login" });
+    sendError(res, 500, "Erro ao fazer login");
   }
 };
 
-export const me = async (req: Request & { userId?: number }, res: Response) => {
+export const me = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
       "SELECT id, name, email FROM users WHERE id = $1",
       [req.userId],
     );
     if (result.rows.length === 0) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Usuário não encontrado" });
+      return sendError(res, 404, "Usuário não encontrado");
     }
     res.json(result.rows[0]);
   } catch (error) {
     console.error(error);
-    res
-      .status(500)
-      .json({ status: "error", message: "Erro ao buscar usuário" });
+    sendError(res, 500, "Erro ao buscar usuário");
+  }
+};
+
+export const updateProfile = async (req: AuthRequest, res: Response) => {
+  const name = cleanText(req.body?.name, 100);
+  if (!name) {
+    return sendError(res, 400, "Informe o nome");
+  }
+
+  try {
+    const result = await pool.query(
+      "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email",
+      [name, req.userId],
+    );
+    if (result.rows.length === 0) {
+      return sendError(res, 404, "Usuário não encontrado");
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao atualizar perfil");
+  }
+};
+
+export const changePassword = async (req: AuthRequest, res: Response) => {
+  const { current_password, new_password } = req.body ?? {};
+
+  if (typeof current_password !== "string" || typeof new_password !== "string") {
+    return sendError(res, 400, "Informe a senha atual e a nova senha");
+  }
+  if (new_password.length < MIN_PASSWORD_LENGTH) {
+    return sendError(
+      res,
+      400,
+      `A nova senha precisa ter pelo menos ${MIN_PASSWORD_LENGTH} caracteres`,
+    );
+  }
+
+  try {
+    const result = await pool.query(
+      "SELECT password_hash FROM users WHERE id = $1",
+      [req.userId],
+    );
+    const user = result.rows[0];
+    if (!user || !(await bcrypt.compare(current_password, user.password_hash))) {
+      return sendError(res, 400, "Senha atual incorreta");
+    }
+
+    const passwordHash = await bcrypt.hash(new_password, 10);
+    await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
+      passwordHash,
+      req.userId,
+    ]);
+    res.status(204).send();
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao alterar senha");
   }
 };
