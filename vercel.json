@@ -1,3 +1,9 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/api" }]
+  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
+  "crons": [
+    {
+      "path": "/keep-alive?source=vercel-cron",
+      "schedule": "0 9 * * *"
+    }
+  ]
 }

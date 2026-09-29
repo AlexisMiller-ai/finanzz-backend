@@ -1,0 +1,49 @@
+name: Manter banco ativo
+
+# O plano free do Supabase pausa o projeto após 7 dias sem atividade, e
+# despausar só é possível manualmente no painel. Este workflow é a segunda
+# camada de proteção (a primeira é o cron da Vercel, em vercel.json):
+# se uma falhar, a outra mantém o banco vivo. Aqui, uma falha ainda gera
+# e-mail de notificação do GitHub.
+#
+# Atenção: o GitHub desativa agendamentos em repositórios sem commits por
+# 60 dias e avisa por e-mail. Se isso acontecer, reative na aba Actions.
+
+on:
+  schedule:
+    - cron: "0 12 */2 * *" # a cada 2 dias, 12:00 UTC (9:00 em Brasília)
+  workflow_dispatch: # permite rodar na mão pela aba Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Registrar atividade no banco
+        env:
+          API_URL: ${{ vars.API_URL || 'https://finanzz-backend.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          # O banco pode estar lento para acordar: tenta até 3 vezes.
+          for attempt in 1 2 3; do
+            echo "Tentativa $attempt..."
+            code=$(curl -sS --max-time 30 \
+              -o resposta.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${CRON_SECRET:-}" \
+              "$API_URL/keep-alive?source=github-actions") && true
+
+            if [ "$code" = "200" ]; then
+              cat resposta.json
+              echo
+              echo "Banco respondeu normalmente."
+              exit 0
+            fi
+
+            echo "Resposta HTTP $code"
+            cat resposta.json 2>/dev/null || true
+            sleep 15
+          done
+
+          echo "::error::O banco não respondeu. Verifique se o projeto do Supabase foi pausado."
+          exit 1
