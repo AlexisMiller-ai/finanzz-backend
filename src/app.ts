@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { pool } from "./config/db";
 import authRoutes from "./routes/auth";
 import categoriesRoutes from "./routes/categories";
 import transactionsRoutes from "./routes/transactions";
@@ -10,6 +9,7 @@ import budgetsRoutes from "./routes/budgets";
 import goalsRoutes from "./routes/goals";
 import savingsRoutes from "./routes/savings";
 import { authenticate } from "./middleware/auth";
+import { health, keepAlive } from "./controllers/healthController";
 import { sendError } from "./utils/validation";
 
 dotenv.config();
@@ -32,17 +32,11 @@ app.use("/budgets", authenticate, budgetsRoutes);
 app.use("/goals", authenticate, goalsRoutes);
 app.use("/savings", authenticate, savingsRoutes);
 
-app.get("/health", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT NOW()");
-    res.json({ status: "ok", dbTime: result.rows[0].now });
-  } catch (error) {
-    console.error(error);
-    res
-      .status(500)
-      .json({ status: "error", message: "Falha ao conectar no banco" });
-  }
-});
+app.get("/health", health);
+
+// Mantém o banco ativo (Supabase free pausa o projeto após 7 dias parado).
+app.get("/keep-alive", keepAlive);
+app.post("/keep-alive", keepAlive);
 
 app.use((req, res) => {
   sendError(res, 404, "Rota não encontrada");

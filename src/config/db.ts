@@ -16,6 +16,16 @@ const useSsl = process.env.DATABASE_SSL
 export const pool = new Pool({
   connectionString,
   ssl: useSsl ? { rejectUnauthorized: false } : false,
+  // Ambiente serverless: poucas conexões por instância e nada de conexão ociosa presa.
+  max: Number(process.env.DATABASE_POOL_MAX ?? 3),
+  idleTimeoutMillis: 10_000,
+  // O banco pode estar "acordando"; vale esperar um pouco mais pela conexão.
+  connectionTimeoutMillis: 15_000,
+});
+
+// Sem este listener, um erro em conexão ociosa derruba o processo inteiro.
+pool.on("error", (error) => {
+  console.error("[db] erro em conexão ociosa:", error.message);
 });
 
 export async function withTransaction<T>(

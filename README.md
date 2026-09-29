@@ -19,6 +19,7 @@ Variáveis de ambiente (`.env`):
 | `JWT_SECRET` | Chave dos tokens. **Obrigatória em produção** |
 | `PORT` | Porta local (padrão 3333) |
 | `DATABASE_SSL` | `false` para desativar SSL (automático para localhost) |
+| `CRON_SECRET` | Protege `/keep-alive`. Se definida, exige `Authorization: Bearer <segredo>` |
 
 Banco novo: rode `db/schema.sql` e depois `npm run migrate`. As migrations são aditivas e idempotentes.
 
@@ -43,6 +44,7 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 | GET/POST | `/budgets` | Orçamentos do mês com gasto / cria ou atualiza limite |
 | POST | `/budgets/copy` | Copia orçamentos de `from_month` para `to_month` |
 | DELETE | `/budgets/:id` | Exclui orçamento |
+| GET/POST | `/keep-alive` | Registra atividade no banco (ver "Manter o banco ativo") |
 | GET/POST | `/goals` | Meta de economia do mês (`savings_goal: 0` remove) |
 | PUT | `/savings` | Ajusta o total guardado para `manual_total` |
 
@@ -53,3 +55,23 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 - Lançamentos de cartão: `date` = 1º dia do mês da fatura, `purchase_date` = data da compra.
 - **Total guardado** = entradas − saídas desde `SAVINGS_START_DATE` (`src/services/savings.ts`) **até hoje**, mais o ajuste manual. Parcelas e lançamentos futuros só entram quando a data chega.
 - Toda consulta e alteração é filtrada pelo usuário do token, inclusive a categoria informada em lançamentos e orçamentos.
+
+## Manter o banco ativo
+
+O projeto do Supabase no plano free é **pausado após 7 dias sem atividade**, e despausar só é possível manualmente no painel. Para evitar isso, `/keep-alive` faz uma **escrita** na tabela `app_heartbeat` e é chamado por dois agendadores independentes:
+
+1. **Cron da Vercel** (`vercel.json`): todo dia às 9:00 UTC. É o principal.
+2. **GitHub Actions** (`.github/workflows/keep-alive.yml`): a cada 2 dias, com 3 tentativas. É a rede de segurança e, se falhar, o GitHub envia e-mail.
+
+Configuração opcional, mas recomendada:
+
+- Variável de ambiente `CRON_SECRET` no projeto da Vercel (a Vercel envia esse valor no cron automaticamente).
+- O mesmo valor em *Settings → Secrets and variables → Actions → New repository secret*, com o nome `CRON_SECRET`.
+
+Para conferir quando foi o último sinal:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" "https://finanzz-backend.vercel.app/keep-alive?source=manual"
+```
+
+A resposta traz `daysSincePreviousPing`: se esse número se aproximar de 7, algum agendador parou de rodar. O GitHub também desativa agendamentos em repositórios sem commits por 60 dias (avisa por e-mail; basta reativar na aba Actions).
