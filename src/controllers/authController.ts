@@ -69,6 +69,13 @@ export const register = async (req: Request, res: Response) => {
           [category.name, category.type, category.color, created.id],
         );
       }
+
+      // Toda conta nasce com uma conta de dinheiro, senão não há onde lançar.
+      await client.query(
+        "INSERT INTO accounts (user_id, name, kind) VALUES ($1, $2, $3)",
+        [created.id, "Conta principal", "corrente"],
+      );
+
       return created;
     });
 

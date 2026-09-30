@@ -26,9 +26,14 @@ const INSTALLMENT_SUFFIX = /\s*\(\d+\/\d+\)$/;
 type Scope = "single" | "future" | "all";
 
 const SELECT_WITH_CATEGORY = `
-  SELECT t.*, c.name AS category_name, c.color AS category_color
+  SELECT t.*,
+         c.name AS category_name, c.color AS category_color,
+         a.name AS account_name, a.color AS account_color,
+         cd.name AS card_name, cd.color AS card_color
   FROM transactions t
-  LEFT JOIN categories c ON c.id = t.category_id`;
+  LEFT JOIN categories c ON c.id = t.category_id
+  LEFT JOIN accounts a ON a.id = t.account_id
+  LEFT JOIN cards cd ON cd.id = t.card_id`;
 
 interface TransactionInput {
   cents: number;
@@ -38,6 +43,8 @@ interface TransactionInput {
   date: string;
   purchaseDate: string;
   paymentMethod: PaymentMethod;
+  accountId: number | null;
+  cardId: number | null;
 }
 
 /** Valida o corpo da requisição. Devolve a mensagem de erro ou os dados limpos. */
@@ -83,9 +90,58 @@ async function parseInput(
     "",
   ) || null;
 
+  // Despesa no crédito pertence a um cartão; todo o resto, a uma conta.
+  const wantsCard = type === "despesa" && paymentMethod === "credito";
+  let accountId: number | null = null;
+  let cardId: number | null = null;
+
+  if (wantsCard) {
+    cardId = body.card_id ? Number(body.card_id) : await firstOf("cards", req.userId);
+    if (cardId && !(await belongsToUser("cards", cardId, req.userId))) {
+      return { error: "Cartão não encontrado" };
+    }
+  } else {
+    accountId = body.account_id ? Number(body.account_id) : await firstOf("accounts", req.userId);
+    if (accountId && !(await belongsToUser("accounts", accountId, req.userId))) {
+      return { error: "Conta não encontrada" };
+    }
+  }
+
   return {
-    data: { cents, type, categoryId, description, date, purchaseDate, paymentMethod },
+    data: {
+      cents, type, categoryId, description, date, purchaseDate, paymentMethod, accountId, cardId,
+    },
   };
+}
+
+/** A tabela só pode ser "accounts" ou "cards" (valor interno, nunca do usuário). */
+async function belongsToUser(table: "accounts" | "cards", id: number, userId: number | undefined) {
+  const result = await pool.query(
+    `SELECT id FROM ${table} WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return result.rows.length > 0;
+}
+
+/**
+ * Conta/cartão padrão de quem não escolheu nada no formulário. Se ainda não
+ * existe nenhum, cria — assim nenhum lançamento fica sem lugar, e o usuário
+ * renomeia depois na tela de contas.
+ */
+async function firstOf(table: "accounts" | "cards", userId: number | undefined) {
+  const result = await pool.query(
+    `SELECT id FROM ${table} WHERE user_id = $1 AND archived = false ORDER BY id LIMIT 1`,
+    [userId],
+  );
+  if (result.rows[0]) return result.rows[0].id as number;
+
+  const created = await pool.query(
+    table === "cards"
+      ? "INSERT INTO cards (user_id, name) VALUES ($1, 'Cartão de crédito') RETURNING id"
+      : "INSERT INTO accounts (user_id, name, kind) VALUES ($1, 'Conta principal', 'corrente') RETURNING id",
+    [userId],
+  );
+  return created.rows[0].id as number;
 }
 
 function installmentDescription(base: string | null, n: number, total: number) {
@@ -106,8 +162,8 @@ async function insertRow(
   const result = await client.query(
     `INSERT INTO transactions
       (amount, type, category_id, description, date, purchase_date, payment_method, user_id,
-       installment_group_id, installment_number, installment_total, recurrence_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+       installment_group_id, installment_number, installment_total, recurrence_id, account_id, card_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
     [
       centsToDecimal(input.cents),
       input.type,
@@ -121,6 +177,8 @@ async function insertRow(
       extra.installmentNumber ?? null,
       extra.installmentTotal ?? null,
       extra.recurrenceId ?? null,
+      input.accountId,
+      input.cardId,
     ],
   );
   return result.rows[0];
@@ -242,6 +300,14 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
   }
 };
 
+async function isTransferRow(id: unknown, userId: number | undefined) {
+  const result = await pool.query(
+    "SELECT id FROM transactions WHERE id = $1 AND user_id = $2 AND transfer_id IS NOT NULL",
+    [id, userId],
+  );
+  return result.rows.length > 0;
+}
+
 function parseScope(value: unknown): Scope {
   return value === "future" || value === "all" ? value : "single";
 }
@@ -284,6 +350,13 @@ export const updateTransaction = async (req: AuthRequest, res: Response) => {
   const scope = parseScope(req.body?.scope);
 
   try {
+    if (await isTransferRow(req.params.id, req.userId)) {
+      return sendError(
+        res,
+        400,
+        "Este lançamento faz parte de uma transferência. Exclua a transferência e crie de novo.",
+      );
+    }
     const parsed = await parseInput(req);
     if ("error" in parsed) return sendError(res, 400, parsed.error);
     const input = parsed.data;
@@ -309,18 +382,28 @@ export const updateTransaction = async (req: AuthRequest, res: Response) => {
     if (scope === "single" || target.where.startsWith("id =")) {
       sql = `UPDATE transactions
              SET amount = $1, type = $2, category_id = $3, description = ${descriptionSql},
-                 payment_method = $5, date = $6, purchase_date = $7
-             WHERE id = $8 AND user_id = $9 RETURNING *`;
-      params = [...values, input.date, input.purchaseDate, target.row.id, req.userId];
+                 payment_method = $5, date = $6, purchase_date = $7,
+                 account_id = $8, card_id = $9
+             WHERE id = $10 AND user_id = $11 RETURNING *`;
+      params = [
+        ...values,
+        input.date,
+        input.purchaseDate,
+        input.accountId,
+        input.cardId,
+        target.row.id,
+        req.userId,
+      ];
     } else {
       // Em lote as datas de cada mês são preservadas.
-      const shifted = target.where.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + 5}`);
+      const shifted = target.where.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + 7}`);
       sql = `UPDATE transactions
              SET amount = $1, type = $2, category_id = $3, description = ${descriptionSql},
                  payment_method = $5::varchar,
+                 account_id = $6, card_id = $7,
                  purchase_date = CASE WHEN $5::varchar = 'credito' THEN COALESCE(purchase_date, date) ELSE date END
              WHERE ${shifted} RETURNING *`;
-      params = [...values, ...target.params];
+      params = [...values, input.accountId, input.cardId, ...target.params];
     }
 
     const result = await pool.query(sql, params);
@@ -335,6 +418,19 @@ export const deleteTransaction = async (req: AuthRequest, res: Response) => {
   const scope = parseScope(req.query.scope);
 
   try {
+    // Excluir uma ponta da transferência deixaria a outra órfã: apaga as duas.
+    const transfer = await pool.query(
+      "SELECT transfer_id FROM transactions WHERE id = $1 AND user_id = $2 AND transfer_id IS NOT NULL",
+      [req.params.id, req.userId],
+    );
+    if (transfer.rows[0]) {
+      const result = await pool.query(
+        "DELETE FROM transactions WHERE transfer_id = $1 AND user_id = $2",
+        [transfer.rows[0].transfer_id, req.userId],
+      );
+      return res.json({ deleted: result.rowCount });
+    }
+
     const target = await resolveScope(req, scope);
     if (!target) return sendError(res, 404, "Lançamento não encontrado");
 

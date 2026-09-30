@@ -14,7 +14,7 @@ export async function getCalculatedSavings(userId: number | undefined) {
     `SELECT
        COALESCE(SUM(CASE WHEN type = 'receita' THEN amount ELSE -amount END), 0) AS total
      FROM transactions
-     WHERE user_id = $1 AND date >= $2::date AND date <= $3::date`,
+     WHERE user_id = $1 AND transfer_id IS NULL AND date >= $2::date AND date <= $3::date`,
     [userId, SAVINGS_START_DATE, todayInBrazil()],
   );
   return parseFloat(result.rows[0].total);

@@ -33,6 +33,7 @@ export const getBudgets = async (req: AuthRequest, res: Response) => {
         COALESCE((
           SELECT SUM(t.amount) FROM transactions t
           WHERE t.category_id = b.category_id
+            AND t.transfer_id IS NULL
             AND t.type = 'despesa'
             AND t.user_id = $1
             AND t.date >= b.month_ref AND t.date < (b.month_ref + INTERVAL '1 month')

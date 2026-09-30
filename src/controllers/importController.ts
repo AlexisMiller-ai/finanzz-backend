@@ -24,6 +24,8 @@ const DESCRIPTION_MAX = 240;
 
 interface ParsedRow {
   index: number;
+  accountId: number | null;
+  cardId: number | null;
   cents: number;
   type: TransactionType;
   categoryId: number | null;
@@ -89,6 +91,11 @@ export const importTransactions = async (req: AuthRequest, res: Response) => {
       categoriesResult.rows.map((c) => [c.id, c.type]),
     );
 
+    const accountsResult = await pool.query("SELECT id FROM accounts WHERE user_id = $1", [req.userId]);
+    const accountIds = new Set<number>(accountsResult.rows.map((a) => a.id));
+    const cardsResult = await pool.query("SELECT id FROM cards WHERE user_id = $1", [req.userId]);
+    const cardIds = new Set<number>(cardsResult.rows.map((c) => c.id));
+
     const parsed: ParsedRow[] = [];
     const results: RowStatus[] = [];
 
@@ -131,6 +138,8 @@ export const importTransactions = async (req: AuthRequest, res: Response) => {
 
       parsed.push({
         index,
+        accountId: accountIds.has(Number(raw?.account_id)) ? Number(raw.account_id) : null,
+        cardId: cardIds.has(Number(raw?.card_id)) ? Number(raw.card_id) : null,
         cents,
         type,
         categoryId,
@@ -267,8 +276,9 @@ export const importTransactions = async (req: AuthRequest, res: Response) => {
       for (const row of toInsert) {
         const result = await client.query(
           `INSERT INTO transactions
-             (amount, type, category_id, description, date, purchase_date, payment_method, user_id, external_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             (amount, type, category_id, description, date, purchase_date, payment_method, user_id,
+              external_id, account_id, card_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
            ON CONFLICT (user_id, external_id) DO NOTHING`,
           [
             centsToDecimal(row.cents),
@@ -280,6 +290,8 @@ export const importTransactions = async (req: AuthRequest, res: Response) => {
             row.paymentMethod,
             req.userId,
             row.externalId,
+            row.accountId,
+            row.cardId,
           ],
         );
         count += result.rowCount ?? 0;
