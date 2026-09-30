@@ -36,6 +36,8 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 | PUT/DELETE | `/categories/:id` | Edita / exclui (lançamentos ficam sem categoria) |
 | GET | `/transactions?month=YYYY-MM` | Lançamentos do mês com nome e cor da categoria |
 | POST | `/transactions` | Cria. `installments` (+`is_installment`) para parcelar, `repeat_months` para fixo mensal |
+| POST | `/transactions/import` | Importa em lote; `dry_run: true` só analisa e aponta duplicados |
+| POST | `/transactions/reconcile` | Marca lançamentos manuais como já conferidos com o arquivo do banco |
 | PUT | `/transactions/:id` | Edita. `scope`: `single` \| `future` \| `all` para séries |
 | DELETE | `/transactions/:id?scope=` | Exclui com o mesmo escopo |
 | GET | `/dashboard/summary?month=` | Totais do mês, mês anterior, cartão, meta, disponível e total guardado |
@@ -54,6 +56,8 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 - Datas mensais respeitam o fim do mês (31/01 + 1 mês = 28/02).
 - Lançamentos de cartão: `date` = 1º dia do mês da fatura, `purchase_date` = data da compra.
 - **Total guardado** = entradas − saídas desde `SAVINGS_START_DATE` (`src/services/savings.ts`) **até hoje**, mais o ajuste manual. Parcelas e lançamentos futuros só entram quando a data chega.
+- **Importação**: cada linha guarda um `external_id` (FITID do OFX ou hash da linha do CSV). Um índice único por usuário impede reimportar o mesmo arquivo; sem esse identificador, a comparação é por data + valor + tipo + descrição, contando ocorrências (duas compras iguais no mesmo dia continuam sendo duas).
+- **Conciliação**: na pré-visualização, cada linha do arquivo procura um lançamento manual do usuário (sem `external_id`) do mesmo tipo, com valor igual (ou até 15% de diferença, no máximo R$ 30) e data até 3 dias de distância. `/transactions/reconcile` grava o `external_id` nesse lançamento — sem duplicar — e pode corrigir o valor para o do banco.
 - Toda consulta e alteração é filtrada pelo usuário do token, inclusive a categoria informada em lançamentos e orçamentos.
 
 ## Manter o banco ativo
