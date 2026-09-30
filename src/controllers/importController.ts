@@ -15,6 +15,11 @@ import {
 } from "../utils/validation";
 
 const MAX_ROWS = 500;
+/** A data que o banco registra costuma cair alguns dias depois da compra. */
+const MATCH_WINDOW_DAYS = 3;
+/** Diferença tolerada quando o valor lançado na mão não bate com o do banco. */
+const AMOUNT_TOLERANCE = 0.15;
+const AMOUNT_TOLERANCE_MAX_CENTS = 3000;
 const DESCRIPTION_MAX = 240;
 
 interface ParsedRow {
@@ -29,10 +34,25 @@ interface ParsedRow {
   externalId: string | null;
 }
 
+interface MatchInfo {
+  id: number;
+  date: string;
+  description: string | null;
+  amount: number;
+  /** "exact": mesmo valor. "amount-differs": valor lançado diferente do banco. */
+  kind: "exact" | "amount-differs";
+}
+
 type RowStatus =
   | { index: number; status: "ok" }
+  | { index: number; status: "match"; match: MatchInfo }
   | { index: number; status: "duplicate"; duplicateOf?: number; message: string }
   | { index: number; status: "error"; message: string };
+
+function daysBetween(a: string, b: string) {
+  const diff = Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`);
+  return Math.abs(diff) / 86_400_000;
+}
 
 /** Chave usada quando a origem não traz identificador próprio. */
 function fallbackKey(row: { date: string; cents: number; type: string; description: string | null }) {
@@ -130,9 +150,11 @@ export const importTransactions = async (req: AuthRequest, res: Response) => {
     // Busca o que já existe no período do arquivo para comparar.
     const dates = parsed.map((row) => row.date).sort();
     const existing = await pool.query(
-      `SELECT id, date, amount, type, description, external_id
+      `SELECT id, date, purchase_date, amount, type, description, external_id
          FROM transactions
-        WHERE user_id = $1 AND date >= $2::date AND date <= $3::date`,
+        WHERE user_id = $1
+          AND date >= ($2::date - INTERVAL '${MATCH_WINDOW_DAYS + 1} days')
+          AND date <= ($3::date + INTERVAL '${MATCH_WINDOW_DAYS + 1} days')`,
       [req.userId, dates[0], dates[dates.length - 1]],
     );
 
@@ -140,6 +162,20 @@ export const importTransactions = async (req: AuthRequest, res: Response) => {
     // Conta quantas vezes cada lançamento equivalente já existe: se o extrato
     // tem dois cafés iguais no mesmo dia e só um foi importado antes, o outro entra.
     const remaining = new Map<string, number>();
+
+    // Lançamentos feitos na mão (sem identificador de origem) podem ser o mesmo
+    // gasto que aparece no arquivo, só que com outra descrição e outra data.
+    const candidates = existing.rows
+      .filter((row) => !row.external_id)
+      .map((row) => ({
+        id: row.id as number,
+        effectiveDate: (row.purchase_date ?? row.date) as string,
+        date: row.date as string,
+        cents: Math.round(parseFloat(row.amount) * 100),
+        type: row.type as string,
+        description: row.description as string | null,
+        taken: false,
+      }));
 
     for (const row of existing.rows) {
       if (row.external_id) byExternalId.set(row.external_id, row.id);
@@ -177,12 +213,46 @@ export const importTransactions = async (req: AuthRequest, res: Response) => {
         continue;
       }
 
+      // Na pré-visualização, procura um lançamento manual equivalente para conciliar.
+      // Na importação confirmada isso não se aplica: o que o usuário escolheu entra.
+      const effectiveDate = row.purchaseDate || row.date;
+      const near = !dryRun ? [] : candidates.filter(
+        (candidate) =>
+          !candidate.taken &&
+          candidate.type === row.type &&
+          daysBetween(candidate.effectiveDate, effectiveDate) <= MATCH_WINDOW_DAYS,
+      );
+      const sameAmount = near.find((candidate) => candidate.cents === row.cents);
+      const closeAmount =
+        sameAmount ??
+        near.find((candidate) => {
+          const diff = Math.abs(candidate.cents - row.cents);
+          return diff <= Math.min(row.cents * AMOUNT_TOLERANCE, AMOUNT_TOLERANCE_MAX_CENTS);
+        });
+
+      if (closeAmount) {
+        closeAmount.taken = true;
+        results.push({
+          index: row.index,
+          status: "match",
+          match: {
+            id: closeAmount.id,
+            date: closeAmount.effectiveDate,
+            description: closeAmount.description,
+            amount: closeAmount.cents / 100,
+            kind: sameAmount ? "exact" : "amount-differs",
+          },
+        });
+        continue;
+      }
+
       results.push({ index: row.index, status: "ok" });
       toInsert.push(row);
     }
 
     const summary = {
       imported: 0,
+      matches: results.filter((r) => r.status === "match").length,
       duplicates: results.filter((r) => r.status === "duplicate").length,
       errors: results.filter((r) => r.status === "error").length,
       results: results.sort((a, b) => a.index - b.index),
