@@ -34,6 +34,7 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 | PUT | `/auth/password` | Troca de senha (`current_password`, `new_password`) |
 | GET/POST | `/accounts` | Contas com saldo calculado / cria conta |
 | PUT/DELETE | `/accounts/:id` | Edita (inclui arquivar) / exclui conta sem lançamentos |
+| PUT | `/accounts/:id/balance` | Informa o saldo atual e recalcula o saldo inicial |
 | GET/POST | `/cards` | Cartões com fatura do mês (`?month=`) e saldo devedor / cria cartão |
 | PUT/DELETE | `/cards/:id` | Edita / exclui cartão sem lançamentos |
 | POST | `/transfers` | Transferência entre contas ou pagamento de fatura (conta → cartão) |
@@ -43,6 +44,7 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 | GET | `/transactions?month=YYYY-MM` | Lançamentos do mês com nome e cor da categoria |
 | POST | `/transactions` | Cria. `installments` (+`is_installment`) para parcelar, `repeat_months` para fixo mensal |
 | POST | `/transactions/import` | Importa em lote; `dry_run: true` só analisa e aponta duplicados |
+| POST | `/transactions/move` | Move vários lançamentos para outra conta ou cartão |
 | POST | `/transactions/reconcile` | Marca lançamentos manuais como já conferidos com o arquivo do banco |
 | PUT | `/transactions/:id` | Edita. `scope`: `single` \| `future` \| `all` para séries |
 | DELETE | `/transactions/:id?scope=` | Exclui com o mesmo escopo |
@@ -64,7 +66,8 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 - **Total guardado** = entradas − saídas desde `SAVINGS_START_DATE` (`src/services/savings.ts`) **até hoje**, mais o ajuste manual. Parcelas e lançamentos futuros só entram quando a data chega.
 - **Importação**: cada linha guarda um `external_id` (FITID do OFX ou hash da linha do CSV). Um índice único por usuário impede reimportar o mesmo arquivo; sem esse identificador, a comparação é por data + valor + tipo + descrição, contando ocorrências (duas compras iguais no mesmo dia continuam sendo duas).
 - **Contas e cartões**: todo lançamento fica numa conta **ou** num cartão (restrição no banco garante que nunca nos dois). Despesa no crédito vai para o cartão; o resto, para a conta. Sem escolha explícita, usa a primeira conta/cartão do usuário e cria uma se não houver nenhuma.
-- **Saldo da conta** = saldo inicial + entradas − saídas, considerando só lançamentos até hoje (parcelas e agendamentos futuros não mexem no saldo de agora).
+- **Saldo da conta** = saldo inicial + entradas − saídas, considerando só lançamentos até hoje (parcelas e agendamentos futuros não mexem no saldo de agora). `PUT /accounts/:id/balance` faz o caminho inverso: recebe o saldo real de hoje e deduz o inicial.
+- **Cartão**: `billTotal` é a fatura do mês consultado; `outstanding` é a dívida até a fatura do mês atual (já menos os pagamentos); `futureInstallments` são as parcelas que ainda vão cair em faturas futuras.
 - **Transferência** grava duas linhas com o mesmo `transfer_id`: muda os saldos, mas fica fora de entradas, saídas, distribuição, evolução, orçamentos e total guardado. Pagar a fatura é uma transferência conta → cartão, e abate o saldo devedor do cartão.
 - **Conciliação**: na pré-visualização, cada linha do arquivo procura um lançamento manual do usuário (sem `external_id`) do mesmo tipo, com valor igual (ou até 15% de diferença, no máximo R$ 30) e data até 3 dias de distância. `/transactions/reconcile` grava o `external_id` nesse lançamento — sem duplicar — e pode corrigir o valor para o do banco.
 - Toda consulta e alteração é filtrada pelo usuário do token, inclusive a categoria informada em lançamentos e orçamentos.

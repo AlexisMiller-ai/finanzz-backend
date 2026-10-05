@@ -164,6 +164,40 @@ export const deleteAccount = async (req: AuthRequest, res: Response) => {
 };
 
 /** Soma dos saldos das contas ativas — quanto o usuário tem hoje. */
+/**
+ * Ajusta o saldo inicial para que o saldo exibido fique igual ao informado.
+ * Mesma ideia do ajuste do total guardado: o usuário diz quanto tem hoje na
+ * conta e o sistema descobre de onde a conta partiu.
+ */
+export const adjustBalance = async (req: AuthRequest, res: Response) => {
+  const target = Number(req.body?.current_balance);
+  if (req.body?.current_balance === undefined || !Number.isFinite(target) || Math.abs(target) >= 1e8) {
+    return sendError(res, 400, "Informe o saldo atual da conta");
+  }
+
+  try {
+    const movement = await pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN t.type = 'receita' THEN t.amount ELSE -t.amount END), 0) AS net
+         FROM transactions t
+        WHERE t.account_id = $1 AND t.user_id = $2 AND t.date <= CURRENT_DATE`,
+      [req.params.id, req.userId],
+    );
+    const net = parseFloat(movement.rows[0].net);
+    const initial = Math.round((target - net) * 100) / 100;
+
+    const result = await pool.query(
+      "UPDATE accounts SET initial_balance = $1 WHERE id = $2 AND user_id = $3 RETURNING id",
+      [initial.toFixed(2), req.params.id, req.userId],
+    );
+    if (result.rows.length === 0) return sendError(res, 404, "Conta não encontrada");
+
+    res.json({ initialBalance: initial, balance: target, movement: net });
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao ajustar saldo");
+  }
+};
+
 export async function getTotalBalance(userId: number | undefined) {
   const result = await pool.query(
     `SELECT COALESCE(SUM(${BALANCE_EXPR}), 0) AS total
