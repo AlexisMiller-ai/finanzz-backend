@@ -16,6 +16,7 @@ import {
   parseMonth,
   sendError,
   toCents,
+  todayInBrazil,
 } from "../utils/validation";
 
 const MAX_INSTALLMENTS = 72;
@@ -45,6 +46,10 @@ interface TransactionInput {
   paymentMethod: PaymentMethod;
   accountId: number | null;
   cardId: number | null;
+  /** false = ainda não foi pago/recebido (conta a pagar ou a receber). */
+  settled: boolean;
+  /** Dia em que foi pago/recebido, quando diferente da data prevista. */
+  settledAt: string | null;
 }
 
 /** Valida o corpo da requisição. Devolve a mensagem de erro ou os dados limpos. */
@@ -107,9 +112,14 @@ async function parseInput(
     }
   }
 
+  // Lançamento de cartão não tem pendência própria: quem é paga é a fatura.
+  const settled = wantsCard ? true : body.settled !== false;
+  const settledAt = settled ? (parseDate(body.settled_at) ?? date) : null;
+
   return {
     data: {
       cents, type, categoryId, description, date, purchaseDate, paymentMethod, accountId, cardId,
+      settled, settledAt,
     },
   };
 }
@@ -158,13 +168,17 @@ async function insertRow(
     installmentNumber?: number;
     installmentTotal?: number;
     recurrenceId?: string;
+    /** Parcelas e repetições futuras nascem pendentes. */
+    settled?: boolean;
   } = {},
 ) {
+  const settled = extra.settled ?? input.settled;
   const result = await client.query(
     `INSERT INTO transactions
       (amount, type, category_id, description, date, purchase_date, payment_method, user_id,
-       installment_group_id, installment_number, installment_total, recurrence_id, account_id, card_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+       installment_group_id, installment_number, installment_total, recurrence_id, account_id, card_id,
+       settled, settled_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
     [
       centsToDecimal(input.cents),
       input.type,
@@ -180,6 +194,8 @@ async function insertRow(
       extra.recurrenceId ?? null,
       input.accountId,
       input.cardId,
+      settled,
+      settled ? input.settledAt : null,
     ],
   );
   return result.rows[0];
@@ -196,6 +212,12 @@ export const getTransactions = async (req: AuthRequest, res: Response) => {
     }
     params.push(monthStart);
     where += " AND t.date >= $2::date AND t.date < ($2::date + INTERVAL '1 month')";
+  }
+
+  if (req.query.status !== undefined) {
+    if (req.query.status === "pendente") where += " AND NOT t.settled";
+    else if (req.query.status === "efetivado") where += " AND t.settled";
+    else return sendError(res, 400, 'Parâmetro "status" inválido (use pendente ou efetivado)');
   }
 
   try {
@@ -264,6 +286,9 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
                 installmentGroupId: groupId,
                 installmentNumber: i,
                 installmentTotal: installments,
+                // Parcela futura é compromisso a pagar, não dinheiro que já saiu.
+                // No cartão não existe pendência por parcela: quem é paga é a fatura.
+                settled: input.cardId !== null || i === 1 ? input.settled : false,
               },
             ),
           );
@@ -284,7 +309,9 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
                 date: addMonths(input.date, i),
                 purchaseDate: addMonths(input.purchaseDate, i),
               },
-              { recurrenceId },
+              // A primeira segue o formulário; as repetições ficam a pagar
+              // (no cartão, quem recebe baixa é a fatura, então seguem efetivadas).
+              { recurrenceId, settled: input.cardId !== null || i === 0 ? input.settled : false },
             ),
           );
         }
@@ -384,14 +411,17 @@ export const updateTransaction = async (req: AuthRequest, res: Response) => {
       sql = `UPDATE transactions
              SET amount = $1, type = $2, category_id = $3, description = ${descriptionSql},
                  payment_method = $5, date = $6, purchase_date = $7,
-                 account_id = $8, card_id = $9
-             WHERE id = $10 AND user_id = $11 RETURNING *`;
+                 account_id = $8, card_id = $9,
+                 settled = $10, settled_at = CASE WHEN $10 THEN $11::date ELSE NULL END
+             WHERE id = $12 AND user_id = $13 RETURNING *`;
       params = [
         ...values,
         input.date,
         input.purchaseDate,
         input.accountId,
         input.cardId,
+        input.settled,
+        input.settledAt,
         target.row.id,
         req.userId,
       ];
@@ -502,5 +532,41 @@ export const deleteInstallmentGroup = async (req: AuthRequest, res: Response) =>
   } catch (error) {
     console.error(error);
     sendError(res, 500, "Erro ao excluir parcelamento");
+  }
+};
+
+/**
+ * Baixa de um lançamento: marca como pago/recebido, ou volta para pendente.
+ * Cartão e transferência não entram aqui — no cartão quem recebe baixa é a
+ * fatura, e transferência é dinheiro que já mudou de lugar.
+ */
+export const settleTransaction = async (req: AuthRequest, res: Response) => {
+  const settled = req.body?.settled !== false;
+  const date = req.body?.date === undefined ? todayInBrazil() : parseDate(req.body.date);
+  if (!date) return sendError(res, 400, "Data do pagamento inválida");
+
+  try {
+    const existing = await pool.query(
+      "SELECT id, card_id, transfer_id FROM transactions WHERE id = $1 AND user_id = $2",
+      [req.params.id, req.userId],
+    );
+    const row = existing.rows[0];
+    if (!row) return sendError(res, 404, "Lançamento não encontrado");
+    if (row.card_id) {
+      return sendError(res, 400, "Compra no cartão: quem recebe baixa é a fatura do cartão");
+    }
+    if (row.transfer_id) {
+      return sendError(res, 400, "Transferência não tem pendência: o dinheiro já mudou de lugar");
+    }
+
+    const updated = await pool.query(
+      `UPDATE transactions SET settled = $1, settled_at = CASE WHEN $1 THEN $2::date ELSE NULL END
+        WHERE id = $3 AND user_id = $4 RETURNING *`,
+      [settled, date, req.params.id, req.userId],
+    );
+    res.json(updated.rows[0]);
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao dar baixa no lançamento");
   }
 };
