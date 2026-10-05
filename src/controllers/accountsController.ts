@@ -15,6 +15,7 @@ const BALANCE_EXPR = `
     SELECT SUM(CASE WHEN t.type = 'receita' THEN t.amount ELSE -t.amount END)
       FROM transactions t
      WHERE t.account_id = a.id AND t.user_id = a.user_id AND t.date <= CURRENT_DATE
+       AND t.settled
   ), 0)`;
 
 export const getAccounts = async (req: AuthRequest, res: Response) => {
@@ -179,7 +180,7 @@ export const adjustBalance = async (req: AuthRequest, res: Response) => {
     const movement = await pool.query(
       `SELECT COALESCE(SUM(CASE WHEN t.type = 'receita' THEN t.amount ELSE -t.amount END), 0) AS net
          FROM transactions t
-        WHERE t.account_id = $1 AND t.user_id = $2 AND t.date <= CURRENT_DATE`,
+        WHERE t.account_id = $1 AND t.user_id = $2 AND t.date <= CURRENT_DATE AND t.settled`,
       [req.params.id, req.userId],
     );
     const net = parseFloat(movement.rows[0].net);
