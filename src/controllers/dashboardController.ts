@@ -24,7 +24,8 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
             COALESCE(SUM(amount) FILTER (WHERE type = 'despesa' AND payment_method = 'credito'), 0) AS cartao,
             COUNT(*)::int AS quantidade
            FROM transactions
-           WHERE user_id = $1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month')`,
+           WHERE user_id = $1 AND transfer_id IS NULL
+             AND date >= $2::date AND date < ($2::date + INTERVAL '1 month')`,
           [req.userId, monthStart],
         ),
         pool.query(
@@ -32,7 +33,8 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
             COALESCE(SUM(amount) FILTER (WHERE type = 'receita'), 0) AS entradas,
             COALESCE(SUM(amount) FILTER (WHERE type = 'despesa'), 0) AS saidas
            FROM transactions
-           WHERE user_id = $1 AND date >= ($2::date - INTERVAL '1 month') AND date < $2::date`,
+           WHERE user_id = $1 AND transfer_id IS NULL
+             AND date >= ($2::date - INTERVAL '1 month') AND date < $2::date`,
           [req.userId, monthStart],
         ),
         pool.query(
@@ -94,6 +96,7 @@ export const getEvolution = async (req: AuthRequest, res: Response) => {
        FROM generate_series($2::date, $2::date + ($3::int - 1) * INTERVAL '1 month', INTERVAL '1 month') AS m(month_start)
        LEFT JOIN transactions t
          ON t.user_id = $1
+        AND t.transfer_id IS NULL
         AND t.date >= m.month_start
         AND t.date < m.month_start + INTERVAL '1 month'
        GROUP BY m.month_start
@@ -129,6 +132,7 @@ export const getDistribution = async (req: AuthRequest, res: Response) => {
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
        WHERE t.user_id = $1
+         AND t.transfer_id IS NULL
          AND t.type = 'despesa'
          AND t.date >= $2::date AND t.date < ($2::date + INTERVAL '1 month')
        GROUP BY c.id, c.name, c.color

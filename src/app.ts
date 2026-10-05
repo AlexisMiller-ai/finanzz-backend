@@ -8,6 +8,9 @@ import dashboardRoutes from "./routes/dashboard";
 import budgetsRoutes from "./routes/budgets";
 import goalsRoutes from "./routes/goals";
 import savingsRoutes from "./routes/savings";
+import accountsRoutes from "./routes/accounts";
+import cardsRoutes from "./routes/cards";
+import transfersRoutes from "./routes/transfers";
 import { authenticate } from "./middleware/auth";
 import { health, keepAlive } from "./controllers/healthController";
 import { sendError } from "./utils/validation";
@@ -31,6 +34,9 @@ app.use("/dashboard", authenticate, dashboardRoutes);
 app.use("/budgets", authenticate, budgetsRoutes);
 app.use("/goals", authenticate, goalsRoutes);
 app.use("/savings", authenticate, savingsRoutes);
+app.use("/accounts", authenticate, accountsRoutes);
+app.use("/cards", authenticate, cardsRoutes);
+app.use("/transfers", authenticate, transfersRoutes);
 
 app.get("/health", health);
 
