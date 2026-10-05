@@ -6,9 +6,11 @@ import {
   deleteCard,
   adjustOutstanding,
 } from "../controllers/cardsController";
+import bills from "./bills";
 
 const router = Router();
 
+router.use("/:id/bills", bills); // faturas do cartão
 router.get("/", getCards); // ?month=YYYY-MM para o total da fatura do mês
 router.post("/", createCard);
 router.put("/:id", updateCard);
