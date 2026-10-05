@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { pool } from "../config/db";
+import { pool, withTransaction } from "../config/db";
 import { AuthRequest } from "../middleware/auth";
 import {
   centsToDecimal,
@@ -28,7 +28,7 @@ export const getCards = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT c.id, c.name, c.color, c.closing_day, c.due_day, c.limit_amount,
-              c.payment_account_id, c.archived,
+              c.payment_account_id, c.archived, c.is_default,
               a.name AS payment_account_name,
               COALESCE((
                 SELECT SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END)
@@ -59,6 +59,7 @@ export const getCards = async (req: AuthRequest, res: Response) => {
         paymentAccountId: row.payment_account_id,
         paymentAccountName: row.payment_account_name,
         archived: row.archived,
+        isDefault: row.is_default,
         outstanding: parseFloat(row.outstanding),
         billTotal: parseFloat(row.bill_total),
         transactionCount: row.transaction_count,
@@ -89,6 +90,7 @@ function parseBody(body: Record<string, unknown> | undefined) {
       dueDay: parseDay(body?.due_day),
       limit,
       paymentAccountId: body?.payment_account_id ? Number(body.payment_account_id) : null,
+      isDefault: body?.is_default === true,
     },
   };
 }
@@ -105,7 +107,7 @@ async function validatePaymentAccount(accountId: number | null, userId: number |
 export const createCard = async (req: AuthRequest, res: Response) => {
   const parsed = parseBody(req.body);
   if ("error" in parsed) return sendError(res, 400, parsed.error);
-  const { name, color, closingDay, dueDay, limit, paymentAccountId } = parsed.data;
+  const { name, color, closingDay, dueDay, limit, paymentAccountId, isDefault } = parsed.data;
 
   try {
     if (!(await validatePaymentAccount(paymentAccountId, req.userId))) {
@@ -117,20 +119,28 @@ export const createCard = async (req: AuthRequest, res: Response) => {
     );
     if (existing.rows.length > 0) return sendError(res, 409, "Já existe um cartão com esse nome");
 
-    const result = await pool.query(
-      `INSERT INTO cards (user_id, name, color, closing_day, due_day, limit_amount, payment_account_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-      [
-        req.userId,
-        name,
-        color,
-        closingDay,
-        dueDay,
-        limit === null ? null : centsToDecimal(limit),
-        paymentAccountId,
-      ],
-    );
-    res.status(201).json({ id: result.rows[0].id });
+    const id = await withTransaction(async (client) => {
+      if (isDefault) {
+        await client.query("UPDATE cards SET is_default = false WHERE user_id = $1", [req.userId]);
+      }
+      const result = await client.query(
+        `INSERT INTO cards (user_id, name, color, closing_day, due_day, limit_amount,
+                            payment_account_id, is_default)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [
+          req.userId,
+          name,
+          color,
+          closingDay,
+          dueDay,
+          limit === null ? null : centsToDecimal(limit),
+          paymentAccountId,
+          isDefault,
+        ],
+      );
+      return result.rows[0].id;
+    });
+    res.status(201).json({ id });
   } catch (error) {
     console.error(error);
     sendError(res, 500, "Erro ao criar cartão");
@@ -140,7 +150,7 @@ export const createCard = async (req: AuthRequest, res: Response) => {
 export const updateCard = async (req: AuthRequest, res: Response) => {
   const parsed = parseBody(req.body);
   if ("error" in parsed) return sendError(res, 400, parsed.error);
-  const { name, color, closingDay, dueDay, limit, paymentAccountId } = parsed.data;
+  const { name, color, closingDay, dueDay, limit, paymentAccountId, isDefault } = parsed.data;
   const archived = req.body?.archived === true;
 
   try {
@@ -153,24 +163,32 @@ export const updateCard = async (req: AuthRequest, res: Response) => {
     );
     if (duplicate.rows.length > 0) return sendError(res, 409, "Já existe um cartão com esse nome");
 
-    const result = await pool.query(
-      `UPDATE cards SET name = $1, color = $2, closing_day = $3, due_day = $4,
-              limit_amount = $5, payment_account_id = $6, archived = $7
-        WHERE id = $8 AND user_id = $9 RETURNING id`,
-      [
-        name,
-        color,
-        closingDay,
-        dueDay,
-        limit === null ? null : centsToDecimal(limit),
-        paymentAccountId,
-        archived,
-        req.params.id,
-        req.userId,
-      ],
-    );
-    if (result.rows.length === 0) return sendError(res, 404, "Cartão não encontrado");
-    res.json({ id: result.rows[0].id });
+    const updated = await withTransaction(async (client) => {
+      const wantsDefault = isDefault && !archived;
+      if (wantsDefault) {
+        await client.query("UPDATE cards SET is_default = false WHERE user_id = $1", [req.userId]);
+      }
+      const result = await client.query(
+        `UPDATE cards SET name = $1, color = $2, closing_day = $3, due_day = $4,
+                limit_amount = $5, payment_account_id = $6, archived = $7, is_default = $8
+          WHERE id = $9 AND user_id = $10 RETURNING id`,
+        [
+          name,
+          color,
+          closingDay,
+          dueDay,
+          limit === null ? null : centsToDecimal(limit),
+          paymentAccountId,
+          archived,
+          wantsDefault,
+          req.params.id,
+          req.userId,
+        ],
+      );
+      return result.rows[0]?.id;
+    });
+    if (!updated) return sendError(res, 404, "Cartão não encontrado");
+    res.json({ id: updated });
   } catch (error) {
     console.error(error);
     sendError(res, 500, "Erro ao atualizar cartão");

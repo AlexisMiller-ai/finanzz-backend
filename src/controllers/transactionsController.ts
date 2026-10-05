@@ -130,7 +130,8 @@ async function belongsToUser(table: "accounts" | "cards", id: number, userId: nu
  */
 async function firstOf(table: "accounts" | "cards", userId: number | undefined) {
   const result = await pool.query(
-    `SELECT id FROM ${table} WHERE user_id = $1 AND archived = false ORDER BY id LIMIT 1`,
+    `SELECT id FROM ${table} WHERE user_id = $1 AND archived = false
+      ORDER BY is_default DESC, id LIMIT 1`,
     [userId],
   );
   if (result.rows[0]) return result.rows[0].id as number;

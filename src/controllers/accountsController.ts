@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { pool } from "../config/db";
+import { pool, withTransaction } from "../config/db";
 import { AuthRequest } from "../middleware/auth";
 import { cleanText, isOneOf, isValidHexColor, sendError } from "../utils/validation";
 
@@ -20,7 +20,7 @@ const BALANCE_EXPR = `
 export const getAccounts = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
-      `SELECT a.id, a.name, a.kind, a.color, a.initial_balance, a.archived,
+      `SELECT a.id, a.name, a.kind, a.color, a.initial_balance, a.archived, a.is_default,
               ${BALANCE_EXPR} AS balance,
               (SELECT COUNT(*)::int FROM transactions t WHERE t.account_id = a.id) AS transaction_count
          FROM accounts a
@@ -38,6 +38,7 @@ export const getAccounts = async (req: AuthRequest, res: Response) => {
         initialBalance: parseFloat(row.initial_balance),
         balance: parseFloat(row.balance),
         archived: row.archived,
+        isDefault: row.is_default,
         transactionCount: row.transaction_count,
       })),
     );
@@ -58,13 +59,13 @@ function parseBody(body: Record<string, unknown> | undefined) {
   if (!Number.isFinite(initial) || Math.abs(initial) >= 1e8) {
     return { error: "Saldo inicial inválido" };
   }
-  return { data: { name, kind, color, initial } };
+  return { data: { name, kind, color, initial, isDefault: body?.is_default === true } };
 }
 
 export const createAccount = async (req: AuthRequest, res: Response) => {
   const parsed = parseBody(req.body);
   if ("error" in parsed) return sendError(res, 400, parsed.error);
-  const { name, kind, color, initial } = parsed.data;
+  const { name, kind, color, initial, isDefault } = parsed.data;
 
   try {
     const existing = await pool.query(
@@ -73,12 +74,19 @@ export const createAccount = async (req: AuthRequest, res: Response) => {
     );
     if (existing.rows.length > 0) return sendError(res, 409, "Já existe uma conta com esse nome");
 
-    const result = await pool.query(
-      `INSERT INTO accounts (user_id, name, kind, color, initial_balance)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [req.userId, name, kind, color, initial.toFixed(2)],
-    );
-    res.status(201).json({ id: result.rows[0].id });
+    const id = await withTransaction(async (client) => {
+      // Só pode haver um favorito por usuário.
+      if (isDefault) {
+        await client.query("UPDATE accounts SET is_default = false WHERE user_id = $1", [req.userId]);
+      }
+      const result = await client.query(
+        `INSERT INTO accounts (user_id, name, kind, color, initial_balance, is_default)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [req.userId, name, kind, color, initial.toFixed(2), isDefault],
+      );
+      return result.rows[0].id;
+    });
+    res.status(201).json({ id });
   } catch (error) {
     console.error(error);
     sendError(res, 500, "Erro ao criar conta");
@@ -88,7 +96,7 @@ export const createAccount = async (req: AuthRequest, res: Response) => {
 export const updateAccount = async (req: AuthRequest, res: Response) => {
   const parsed = parseBody(req.body);
   if ("error" in parsed) return sendError(res, 400, parsed.error);
-  const { name, kind, color, initial } = parsed.data;
+  const { name, kind, color, initial, isDefault } = parsed.data;
   const archived = req.body?.archived === true;
 
   try {
@@ -98,13 +106,22 @@ export const updateAccount = async (req: AuthRequest, res: Response) => {
     );
     if (duplicate.rows.length > 0) return sendError(res, 409, "Já existe uma conta com esse nome");
 
-    const result = await pool.query(
-      `UPDATE accounts SET name = $1, kind = $2, color = $3, initial_balance = $4, archived = $5
-        WHERE id = $6 AND user_id = $7 RETURNING id`,
-      [name, kind, color, initial.toFixed(2), archived, req.params.id, req.userId],
-    );
-    if (result.rows.length === 0) return sendError(res, 404, "Conta não encontrada");
-    res.json({ id: result.rows[0].id });
+    const updated = await withTransaction(async (client) => {
+      // Conta arquivada não continua sendo a favorita.
+      const wantsDefault = isDefault && !archived;
+      if (wantsDefault) {
+        await client.query("UPDATE accounts SET is_default = false WHERE user_id = $1", [req.userId]);
+      }
+      const result = await client.query(
+        `UPDATE accounts SET name = $1, kind = $2, color = $3, initial_balance = $4,
+                archived = $5, is_default = $6
+          WHERE id = $7 AND user_id = $8 RETURNING id`,
+        [name, kind, color, initial.toFixed(2), archived, wantsDefault, req.params.id, req.userId],
+      );
+      return result.rows[0]?.id;
+    });
+    if (!updated) return sendError(res, 404, "Conta não encontrada");
+    res.json({ id: updated });
   } catch (error) {
     console.error(error);
     sendError(res, 500, "Erro ao atualizar conta");
