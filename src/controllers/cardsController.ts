@@ -1,6 +1,7 @@
 import { Response } from "express";
 import { pool, withTransaction } from "../config/db";
 import { AuthRequest } from "../middleware/auth";
+import { billClosingDate, billDueDate } from "../utils/bills";
 import {
   centsToDecimal,
   cleanText,
@@ -16,8 +17,39 @@ function parseDay(value: unknown): number | null {
 }
 
 /**
- * Cartões com o total da fatura do mês pedido e o saldo devedor acumulado
- * (tudo que foi gasto menos os pagamentos já lançados).
+ * Expressão SQL do mês da fatura aberta (a que ainda recebe compras).
+ * A partir do dia de fechamento, as compras já entram na fatura seguinte.
+ * Precisa de um alias "c" para a tabela cards.
+ */
+export const OPEN_BILL_SQL = `(CASE
+        WHEN c.closing_day IS NOT NULL AND EXTRACT(DAY FROM CURRENT_DATE) >= c.closing_day
+          THEN date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+        ELSE date_trunc('month', CURRENT_DATE)
+      END)`;
+
+/**
+ * Crédito das faturas marcadas como pagas fora do app. Fica limitado ao que a
+ * fatura realmente tem de dívida: se as compras daquele mês saírem do cartão
+ * (mudança para outro cartão, exclusão), o crédito encolhe junto em vez de
+ * virar saldo a favor.
+ */
+function settlementCredit(filter = ""): string {
+  return `COALESCE((
+                SELECT SUM(GREATEST(LEAST(b.amount, COALESCE((
+                         SELECT SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END)
+                           FROM transactions t
+                          WHERE t.card_id = c.id AND t.user_id = c.user_id
+                            AND t.date >= b.bill_month
+                            AND t.date < b.bill_month + INTERVAL '1 month'
+                       ), 0)), 0))
+                  FROM card_bills b
+                 WHERE b.card_id = c.id AND b.kind = 'externo'${filter}
+              ), 0)`;
+}
+/**
+ * Cartões com o total da fatura do mês pedido, a fatura aberta e o que ainda
+ * está devendo: faturas que já fecharam e não foram marcadas como pagas, mais
+ * o que já entrou na fatura aberta.
  */
 export const getCards = async (req: AuthRequest, res: Response) => {
   const monthStart = req.query.month === undefined ? null : parseMonth(req.query.month);
@@ -28,19 +60,52 @@ export const getCards = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT c.id, c.name, c.color, c.closing_day, c.due_day, c.limit_amount,
-              c.payment_account_id, c.archived, c.is_default,
+              c.payment_account_id, c.archived, c.is_default, c.outstanding_adjustment,
               a.name AS payment_account_name,
+              ${OPEN_BILL_SQL}::date AS open_bill_month,
+              -- Dívida das faturas que já fecharam e seguem sem baixa.
               c.outstanding_adjustment + COALESCE((
                 SELECT SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END)
                   FROM transactions t
                  WHERE t.card_id = c.id AND t.user_id = c.user_id
-                   AND t.date < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
-              ), 0) AS outstanding,
-              c.outstanding_adjustment,
+                   AND t.date < ${OPEN_BILL_SQL}
+              ), 0) - ${settlementCredit(" AND b.bill_month < " + OPEN_BILL_SQL)} AS closed_due,
+              -- O que já caiu na fatura que está aberta.
+              COALESCE((
+                SELECT SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END)
+                  FROM transactions t
+                 WHERE t.card_id = c.id AND t.user_id = c.user_id
+                   AND t.date >= ${OPEN_BILL_SQL}
+                   AND t.date < ${OPEN_BILL_SQL} + INTERVAL '1 month'
+              ), 0) - ${settlementCredit(" AND b.bill_month = " + OPEN_BILL_SQL)} AS open_bill_due,
               COALESCE((
                 SELECT SUM(t.amount) FROM transactions t
                  WHERE t.card_id = c.id AND t.user_id = c.user_id AND t.type = 'despesa'
-                   AND t.date >= date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+                   AND t.date >= ${OPEN_BILL_SQL}
+                   AND t.date < ${OPEN_BILL_SQL} + INTERVAL '1 month'
+              ), 0) AS open_bill_total,
+              EXISTS (
+                SELECT 1 FROM card_bills b
+                 WHERE b.card_id = c.id AND b.bill_month = ${OPEN_BILL_SQL}
+              ) AS open_bill_paid,
+              -- Faturas fechadas com gasto e sem baixa: o que falta acertar.
+              (
+                SELECT COUNT(*)::int FROM (
+                  SELECT t.date FROM transactions t
+                   WHERE t.card_id = c.id AND t.user_id = c.user_id AND t.type = 'despesa'
+                     AND t.date < ${OPEN_BILL_SQL}
+                   GROUP BY t.date
+                  HAVING SUM(t.amount) <> 0
+                ) meses
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM card_bills b
+                   WHERE b.card_id = c.id AND b.bill_month = meses.date
+                )
+              ) AS closed_unpaid_count,
+              COALESCE((
+                SELECT SUM(t.amount) FROM transactions t
+                 WHERE t.card_id = c.id AND t.user_id = c.user_id AND t.type = 'despesa'
+                   AND t.date >= ${OPEN_BILL_SQL} + INTERVAL '1 month'
               ), 0) AS future_installments,
               COALESCE((
                 SELECT SUM(t.amount) FROM transactions t
@@ -56,24 +121,37 @@ export const getCards = async (req: AuthRequest, res: Response) => {
     );
 
     res.json(
-      result.rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        color: row.color,
-        closingDay: row.closing_day,
-        dueDay: row.due_day,
-        limitAmount: row.limit_amount === null ? null : parseFloat(row.limit_amount),
-        paymentAccountId: row.payment_account_id,
-        paymentAccountName: row.payment_account_name,
-        archived: row.archived,
-        isDefault: row.is_default,
-        // Dívida até a fatura deste mês; o que vem depois é compromisso futuro.
-        outstanding: parseFloat(row.outstanding),
-        futureInstallments: parseFloat(row.future_installments),
-        outstandingAdjustment: parseFloat(row.outstanding_adjustment),
-        billTotal: parseFloat(row.bill_total),
-        transactionCount: row.transaction_count,
-      })),
+      result.rows.map((row) => {
+        const closedDue = parseFloat(row.closed_due);
+        const openBillDue = parseFloat(row.open_bill_due);
+        const openBillMonth = row.open_bill_month.slice(0, 7);
+        return {
+          id: row.id,
+          name: row.name,
+          color: row.color,
+          closingDay: row.closing_day,
+          dueDay: row.due_day,
+          limitAmount: row.limit_amount === null ? null : parseFloat(row.limit_amount),
+          paymentAccountId: row.payment_account_id,
+          paymentAccountName: row.payment_account_name,
+          archived: row.archived,
+          isDefault: row.is_default,
+          // Dívida de hoje: faturas fechadas em aberto + o que já entrou na aberta.
+          outstanding: Math.round((closedDue + openBillDue) * 100) / 100,
+          closedDue,
+          // Fatura que ainda está recebendo compras.
+          openBillMonth,
+          openBillTotal: parseFloat(row.open_bill_total),
+          openBillClosingDate: billClosingDate(`${openBillMonth}-01`, row.closing_day),
+          openBillDueDate: billDueDate(`${openBillMonth}-01`, row.closing_day, row.due_day),
+          openBillPaid: row.open_bill_paid,
+          closedUnpaidCount: row.closed_unpaid_count,
+          futureInstallments: parseFloat(row.future_installments),
+          outstandingAdjustment: parseFloat(row.outstanding_adjustment),
+          billTotal: parseFloat(row.bill_total),
+          transactionCount: row.transaction_count,
+        };
+      }),
     );
   } catch (error) {
     console.error(error);
@@ -222,10 +300,16 @@ export const deleteCard = async (req: AuthRequest, res: Response) => {
       );
     }
 
-    await pool.query("DELETE FROM cards WHERE id = $1 AND user_id = $2", [
-      req.params.id,
-      req.userId,
-    ]);
+    await withTransaction(async (client) => {
+      await client.query("DELETE FROM card_bills WHERE card_id = $1 AND user_id = $2", [
+        req.params.id,
+        req.userId,
+      ]);
+      await client.query("DELETE FROM cards WHERE id = $1 AND user_id = $2", [
+        req.params.id,
+        req.userId,
+      ]);
+    });
     res.status(204).send();
   } catch (error) {
     console.error(error);
@@ -251,12 +335,16 @@ export const adjustOutstanding = async (req: AuthRequest, res: Response) => {
 
   try {
     const movement = await pool.query(
-      `SELECT COALESCE(SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END), 0) AS net
-         FROM transactions t
-        WHERE t.card_id = $1 AND t.user_id = $2
-          AND t.date < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'`,
+      `SELECT COALESCE((
+                SELECT SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END)
+                  FROM transactions t
+                 WHERE t.card_id = c.id AND t.user_id = c.user_id
+                   AND t.date < ${OPEN_BILL_SQL} + INTERVAL '1 month'
+              ), 0) - ${settlementCredit()} AS net
+         FROM cards c WHERE c.id = $1 AND c.user_id = $2`,
       [req.params.id, req.userId],
     );
+    if (movement.rows.length === 0) return sendError(res, 404, "Cartão não encontrado");
     const net = parseFloat(movement.rows[0].net);
     const adjustment = Math.round((target - net) * 100) / 100;
 

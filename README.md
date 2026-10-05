@@ -38,6 +38,9 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 | PUT | `/cards/:id/outstanding` | Informa quanto o cartão deve hoje e guarda a diferença como ajuste |
 | GET/POST | `/cards` | Cartões com fatura do mês (`?month=`) e saldo devedor / cria cartão |
 | PUT/DELETE | `/cards/:id` | Edita / exclui cartão sem lançamentos |
+| GET | `/cards/:id/bills` | Faturas do cartão mês a mês, com situação (paga / a pagar / aberta) |
+| POST/DELETE | `/cards/:id/bills/:month/pay` | Dá baixa numa fatura (`YYYY-MM`) / desfaz a baixa |
+| POST | `/cards/:id/bills/settle-past` | Dá baixa em todas as faturas que já fecharam |
 | POST | `/transfers` | Transferência entre contas ou pagamento de fatura (conta → cartão) |
 | DELETE | `/transfers/:transferId` | Exclui as duas pontas |
 | GET/POST | `/categories` | Lista (com `transaction_count`) / cria |
@@ -68,7 +71,9 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 - **Importação**: cada linha guarda um `external_id` (FITID do OFX ou hash da linha do CSV). Um índice único por usuário impede reimportar o mesmo arquivo; sem esse identificador, a comparação é por data + valor + tipo + descrição, contando ocorrências (duas compras iguais no mesmo dia continuam sendo duas).
 - **Contas e cartões**: todo lançamento fica numa conta **ou** num cartão (restrição no banco garante que nunca nos dois). Despesa no crédito vai para o cartão; o resto, para a conta. Sem escolha explícita, usa a primeira conta/cartão do usuário e cria uma se não houver nenhuma.
 - **Saldo da conta** = saldo inicial + entradas − saídas, considerando só lançamentos até hoje (parcelas e agendamentos futuros não mexem no saldo de agora). `PUT /accounts/:id/balance` faz o caminho inverso: recebe o saldo real de hoje e deduz o inicial.
-- **Cartão**: `billTotal` é a fatura do mês consultado; `outstanding` é a dívida até a fatura do mês atual (já menos os pagamentos); `futureInstallments` são as parcelas que ainda vão cair em faturas futuras. `outstanding_adjustment` corrige faturas antigas pagas fora do app (ou depois de mover compras entre cartões) e entra no cálculo do `outstanding`.
+- **Fatura aberta**: a partir do dia de fechamento, a compra já entra na fatura do mês seguinte — é a mesma regra do formulário de lançamento. `openBillMonth` é a fatura que ainda recebe compras; o que vem depois dela é parcela futura (`futureInstallments`).
+- **Cartão**: `billTotal` é a fatura do mês consultado; `closedDue` é o que sobrou das faturas que já fecharam e não receberam baixa; `outstanding` = `closedDue` + o que já caiu na fatura aberta. `outstanding_adjustment` corrige faturas antigas pagas fora do app e entra no cálculo.
+- **Baixa de fatura** (`card_bills`, uma linha por mês de referência): `transferencia` cria o pagamento saindo da conta (o lançamento é que abate a dívida), `externo` foi pago fora do app (o valor é descontado aqui) e `lancado` só marca como paga porque o pagamento já estava lançado. O desconto de uma baixa `externo` nunca passa da dívida daquele mês: se as compras saírem do cartão depois (mudança de cartão, exclusão), o crédito encolhe junto em vez de virar saldo a favor. `settle-past` dá baixa em tudo que já fechou e zera o ajuste manual.
 - **Transferência** grava duas linhas com o mesmo `transfer_id`: muda os saldos, mas fica fora de entradas, saídas, distribuição, evolução, orçamentos e total guardado. Pagar a fatura é uma transferência conta → cartão, e abate o saldo devedor do cartão.
 - **Conciliação**: na pré-visualização, cada linha do arquivo procura um lançamento manual do usuário (sem `external_id`) do mesmo tipo, com valor igual (ou até 15% de diferença, no máximo R$ 30) e data até 3 dias de distância. `/transactions/reconcile` grava o `external_id` nesse lançamento — sem duplicar — e pode corrigir o valor para o do banco.
 - Toda consulta e alteração é filtrada pelo usuário do token, inclusive a categoria informada em lançamentos e orçamentos.
