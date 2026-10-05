@@ -34,7 +34,13 @@ export const getCards = async (req: AuthRequest, res: Response) => {
                 SELECT SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END)
                   FROM transactions t
                  WHERE t.card_id = c.id AND t.user_id = c.user_id
+                   AND t.date < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
               ), 0) AS outstanding,
+              COALESCE((
+                SELECT SUM(t.amount) FROM transactions t
+                 WHERE t.card_id = c.id AND t.user_id = c.user_id AND t.type = 'despesa'
+                   AND t.date >= date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+              ), 0) AS future_installments,
               COALESCE((
                 SELECT SUM(t.amount) FROM transactions t
                  WHERE t.card_id = c.id AND t.user_id = c.user_id AND t.type = 'despesa'
@@ -60,7 +66,9 @@ export const getCards = async (req: AuthRequest, res: Response) => {
         paymentAccountName: row.payment_account_name,
         archived: row.archived,
         isDefault: row.is_default,
+        // Dívida até a fatura deste mês; o que vem depois é compromisso futuro.
         outstanding: parseFloat(row.outstanding),
+        futureInstallments: parseFloat(row.future_installments),
         billTotal: parseFloat(row.bill_total),
         transactionCount: row.transaction_count,
       })),

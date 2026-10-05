@@ -446,6 +446,46 @@ export const deleteTransaction = async (req: AuthRequest, res: Response) => {
   }
 };
 
+/**
+ * Move vários lançamentos para outra conta ou cartão.
+ * Lançamento de conta só vai para conta, e de cartão só para cartão: trocar
+ * entre os dois mudaria o significado da data (fatura x dia do gasto).
+ */
+export const moveTransactions = async (req: AuthRequest, res: Response) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : [];
+  const accountId = req.body?.account_id ? Number(req.body.account_id) : null;
+  const cardId = req.body?.card_id ? Number(req.body.card_id) : null;
+
+  if (ids.length === 0) return sendError(res, 400, "Selecione ao menos um lançamento");
+  if (ids.length > 500) return sendError(res, 400, "Mova no máximo 500 lançamentos por vez");
+  if ((accountId && cardId) || (!accountId && !cardId)) {
+    return sendError(res, 400, "Escolha uma conta ou um cartão de destino");
+  }
+
+  try {
+    const table = cardId ? "cards" : "accounts";
+    const destination = await pool.query(
+      `SELECT id FROM ${table} WHERE id = $1 AND user_id = $2`,
+      [cardId ?? accountId, req.userId],
+    );
+    if (destination.rows.length === 0) return sendError(res, 404, "Destino não encontrado");
+
+    const result = await pool.query(
+      cardId
+        ? `UPDATE transactions SET card_id = $1, account_id = NULL
+            WHERE id = ANY($2::int[]) AND user_id = $3 AND card_id IS NOT NULL`
+        : `UPDATE transactions SET account_id = $1, card_id = NULL
+            WHERE id = ANY($2::int[]) AND user_id = $3 AND account_id IS NOT NULL`,
+      [cardId ?? accountId, ids, req.userId],
+    );
+
+    res.json({ moved: result.rowCount, skipped: ids.length - (result.rowCount ?? 0) });
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao mover lançamentos");
+  }
+};
+
 /** Mantido por compatibilidade: exclui todas as parcelas de uma compra. */
 export const deleteInstallmentGroup = async (req: AuthRequest, res: Response) => {
   const { groupId } = req.params;
