@@ -30,12 +30,13 @@ export const getCards = async (req: AuthRequest, res: Response) => {
       `SELECT c.id, c.name, c.color, c.closing_day, c.due_day, c.limit_amount,
               c.payment_account_id, c.archived, c.is_default,
               a.name AS payment_account_name,
-              COALESCE((
+              c.outstanding_adjustment + COALESCE((
                 SELECT SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END)
                   FROM transactions t
                  WHERE t.card_id = c.id AND t.user_id = c.user_id
                    AND t.date < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
               ), 0) AS outstanding,
+              c.outstanding_adjustment,
               COALESCE((
                 SELECT SUM(t.amount) FROM transactions t
                  WHERE t.card_id = c.id AND t.user_id = c.user_id AND t.type = 'despesa'
@@ -69,6 +70,7 @@ export const getCards = async (req: AuthRequest, res: Response) => {
         // Dívida até a fatura deste mês; o que vem depois é compromisso futuro.
         outstanding: parseFloat(row.outstanding),
         futureInstallments: parseFloat(row.future_installments),
+        outstandingAdjustment: parseFloat(row.outstanding_adjustment),
         billTotal: parseFloat(row.bill_total),
         transactionCount: row.transaction_count,
       })),
@@ -228,6 +230,46 @@ export const deleteCard = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error(error);
     sendError(res, 500, "Erro ao excluir cartão");
+  }
+};
+
+/**
+ * Ajusta quanto o cartão deve hoje. Guarda a diferença entre o valor informado
+ * e o calculado — útil para faturas antigas já pagas que nunca foram
+ * registradas, ou depois de mover lançamentos entre cartões.
+ */
+export const adjustOutstanding = async (req: AuthRequest, res: Response) => {
+  const target = Number(req.body?.current_outstanding);
+  if (
+    req.body?.current_outstanding === undefined ||
+    !Number.isFinite(target) ||
+    target < 0 ||
+    target >= 1e8
+  ) {
+    return sendError(res, 400, "Informe quanto o cartão deve hoje");
+  }
+
+  try {
+    const movement = await pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN t.type = 'despesa' THEN t.amount ELSE -t.amount END), 0) AS net
+         FROM transactions t
+        WHERE t.card_id = $1 AND t.user_id = $2
+          AND t.date < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'`,
+      [req.params.id, req.userId],
+    );
+    const net = parseFloat(movement.rows[0].net);
+    const adjustment = Math.round((target - net) * 100) / 100;
+
+    const result = await pool.query(
+      "UPDATE cards SET outstanding_adjustment = $1 WHERE id = $2 AND user_id = $3 RETURNING id",
+      [adjustment.toFixed(2), req.params.id, req.userId],
+    );
+    if (result.rows.length === 0) return sendError(res, 404, "Cartão não encontrado");
+
+    res.json({ outstanding: target, outstandingAdjustment: adjustment, movement: net });
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao ajustar a fatura em aberto");
   }
 };
 
