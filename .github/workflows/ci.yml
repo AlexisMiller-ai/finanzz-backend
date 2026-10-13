@@ -1,0 +1,23 @@
+name: CI
+
+# Roda em todo PR e em todo push na main: checagem de tipos e as suítes de
+# ponta a ponta (tests/run.mjs sobe um Postgres em memória e a API; nada
+# toca o banco de produção).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
