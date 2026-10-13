@@ -21,7 +21,7 @@ const mes = (delta) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
-const reg = await call('POST', '/auth/register', { name: 'Orc', email: `oc${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Orc', email: `oc${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const conta = (await call('GET', '/accounts')).body[0].id;
 const cats = (await call('GET', '/categories')).body;
@@ -125,7 +125,7 @@ r = await call('GET', '/budgets/suggestions');
 check('sugestões sem mês -> 400', r.status === 400, r.body);
 
 const t1 = token;
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `oo${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `oo${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = outro.body.token;
 r = await call('DELETE', `/budgets/category/${alimentacao}?month=${mes(0)}`);
 check('não encerra orçamento de outro usuário', r.status === 404, r.body);

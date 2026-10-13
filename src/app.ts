@@ -19,11 +19,19 @@ import { sendError } from "./utils/validation";
 dotenv.config();
 
 const app = express();
+// Não anunciar a tecnologia do servidor.
+app.disable("x-powered-by");
 app.use(cors());
 app.use(express.json({ limit: "100kb" }));
 
 app.use((req, res, next) => {
-  res.set("Cache-Control", "no-store");
+  res.set({
+    "Cache-Control": "no-store",
+    // API só de JSON: nada de interpretar como outro tipo nem abrir em frame.
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+  });
   next();
 });
 

@@ -15,7 +15,7 @@ const check = (name, cond, extra) => {
   if (!cond) fails++;
 };
 
-const reg = await call('POST', '/auth/register', { name: 'Conc', email: `conc${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Conc', email: `conc${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const cats = (await call('GET', '/categories')).body;
 const alim = cats.find((c) => c.name === 'Alimentação').id;
@@ -89,7 +89,7 @@ check('identificador já usado é recusado', r.body.reconciled === 0 && r.body.s
 r = await call('POST', '/transactions/reconcile', { items: [{ transaction_id: 999999, external_id: 'ofx:X' }] });
 check('lançamento inexistente é recusado', r.body.skipped[0].reason === 'Lançamento não encontrado', r.body);
 
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `o${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `o${Date.now()}@t.com`, password: 'senha-teste-123' });
 const t1 = token; token = outro.body.token;
 r = await call('POST', '/transactions/reconcile', { items: [{ transaction_id: almoco.id, external_id: 'ofx:Z' }] });
 check('não concilia lançamento de outro usuário', r.body.reconciled === 0, r.body);

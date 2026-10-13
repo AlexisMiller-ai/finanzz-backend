@@ -21,11 +21,11 @@ const mes = (delta) => {
 };
 const atual = mes(0);
 
-const reg = await call('POST', '/auth/register', { name: 'Fat', email: `ft${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Fat', email: `ft${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const conta = (await call('GET', '/accounts')).body[0].id;
-const inter = (await call('POST', '/cards', { name: 'Inter', limit_amount: 3900 })).body.id;
-const nubank = (await call('POST', '/cards', { name: 'Nubank', limit_amount: 9800 })).body.id;
+const inter = (await call('POST', '/cards', { name: 'Inter', limit_amount: 4200 })).body.id;
+const nubank = (await call('POST', '/cards', { name: 'Nubank', limit_amount: 8000 })).body.id;
 
 // cenário do usuário: faturas antigas já pagas na vida real, nunca registradas
 const gasto = (cardId, m, valor, desc) =>
@@ -35,28 +35,28 @@ const gasto = (cardId, m, valor, desc) =>
   });
 await gasto(inter, mes(-2), 700, 'Compras de 2 meses atrás');
 await gasto(inter, mes(-1), 1600, 'Compras do mês passado');
-await gasto(inter, atual, 1733.76, 'Compras deste mês');
+await gasto(inter, atual, 1534.90, 'Compras deste mês');
 
 let card = (await call('GET', `/cards?month=${atual}`)).body.find((c) => c.id === inter);
-check('em aberto soma faturas antigas não pagas', card.outstanding === 4033.76, card);
-check('fatura do mês é só a deste mês', card.billTotal === 1733.76, card);
+check('em aberto soma faturas antigas não pagas', card.outstanding === 3834.90, card);
+check('fatura do mês é só a deste mês', card.billTotal === 1534.90, card);
 
 // ---- ajuste da fatura ----
-let r = await call('PUT', `/cards/${inter}/outstanding`, { current_outstanding: 1733.76 });
-check('ajuste aceita o valor real', r.status === 200 && r.body.outstanding === 1733.76, r.body);
+let r = await call('PUT', `/cards/${inter}/outstanding`, { current_outstanding: 1534.90 });
+check('ajuste aceita o valor real', r.status === 200 && r.body.outstanding === 1534.90, r.body);
 check('guarda a diferença como ajuste', r.body.outstandingAdjustment === -2300, r.body);
 card = (await call('GET', `/cards?month=${atual}`)).body.find((c) => c.id === inter);
-check('em aberto passa a mostrar só a fatura atual', card.outstanding === 1733.76, card);
+check('em aberto passa a mostrar só a fatura atual', card.outstanding === 1534.90, card);
 check('ajuste é devolvido na listagem', card.outstandingAdjustment === -2300, card);
-check('fatura do mês não muda com o ajuste', card.billTotal === 1733.76, card);
+check('fatura do mês não muda com o ajuste', card.billTotal === 1534.90, card);
 
 // novas compras continuam somando por cima do ajuste
 await gasto(inter, atual, 100, 'Compra nova');
 card = (await call('GET', `/cards?month=${atual}`)).body.find((c) => c.id === inter);
-check('compra nova soma ao em aberto ajustado', card.outstanding === 1833.76, card);
+check('compra nova soma ao em aberto ajustado', card.outstanding === 1634.90, card);
 
 // pagamento da fatura abate normalmente
-await call('POST', '/transfers', { from_account_id: conta, to_card_id: inter, amount: 1833.76, date: `${atual}-10` });
+await call('POST', '/transfers', { from_account_id: conta, to_card_id: inter, amount: 1634.90, date: `${atual}-10` });
 card = (await call('GET', `/cards?month=${atual}`)).body.find((c) => c.id === inter);
 check('pagamento zera mesmo com ajuste aplicado', card.outstanding === 0, card);
 
@@ -80,7 +80,7 @@ r = await call('PUT', `/cards/999999/outstanding`, { current_outstanding: 10 });
 check('cartão inexistente -> 404', r.status === 404, r.body);
 
 const t1 = token;
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `o${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `o${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = outro.body.token;
 r = await call('PUT', `/cards/${inter}/outstanding`, { current_outstanding: 0 });
 check('não ajusta cartão de outro usuário', r.status === 404, r.body);

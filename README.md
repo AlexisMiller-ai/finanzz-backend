@@ -106,6 +106,15 @@ curl -H "Authorization: Bearer $CRON_SECRET" "https://finanzz-backend.vercel.app
 
 A resposta traz `daysSincePreviousPing`: se esse número se aproximar de 7, algum agendador parou de rodar. O GitHub também desativa agendamentos em repositórios sem commits por 60 dias (avisa por e-mail; basta reativar na aba Actions).
 
+## Segurança
+
+- **Banco**: todas as tabelas têm RLS ligado e nenhuma permissão para os papéis `anon`/`authenticated` do Supabase (migration `010_seguranca.sql`). A API REST automática do Supabase fica fechada; o app conecta direto como `postgres`, que não passa por RLS.
+- **Senhas**: bcrypt, mínimo de 8 caracteres. O login gasta o mesmo tempo com ou sem conta, para o tempo de resposta não revelar quais e-mails existem.
+- **Limite de tentativas** (guardado no banco, porque no serverless cada requisição pode cair numa instância diferente): 8 senhas erradas por e-mail e 30 por IP a cada 15 minutos; 10 cadastros por IP por hora. Ajustáveis por `LOGIN_MAX_PER_EMAIL`, `LOGIN_MAX_PER_IP` e `REGISTER_MAX_PER_IP`. O IP vem do `x-forwarded-for`, que a Vercel preenche (fora dela, rever `ipDoCliente`).
+- **Sessão**: JWT de 30 dias com `JWT_SECRET` obrigatório em produção. Trocar a senha invalida os tokens emitidos antes e devolve um token novo para quem trocou.
+- **Isolamento**: toda consulta filtra pelo usuário do token, inclusive ids de categoria, conta e cartão vindos do corpo da requisição.
+- **Cabeçalhos**: `X-Content-Type-Options`, `X-Frame-Options` e `Referrer-Policy`; sem `X-Powered-By`.
+
 ## Testes
 
 ```bash

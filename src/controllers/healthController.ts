@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { pool } from "../config/db";
+import { limparTentativasAntigas } from "../services/rateLimit";
 import { sendError } from "../utils/validation";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -41,6 +42,9 @@ export const keepAlive = async (req: Request, res: Response) => {
        RETURNING last_ping, previous_ping, ping_count`,
       [source],
     );
+
+    // Aproveita a chamada diária para limpar tentativas de login antigas.
+    await limparTentativasAntigas();
 
     const row = result.rows[0];
     if (!row) {

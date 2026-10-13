@@ -15,7 +15,7 @@ const check = (name, cond, extra) => {
   if (!cond) fails++;
 };
 
-const reg = await call('POST', '/auth/register', { name: 'Rel', email: `rl${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Rel', email: `rl${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const conta = (await call('GET', '/accounts')).body[0].id;
 const outraConta = (await call('POST', '/accounts', { name: 'Poupança', kind: 'poupanca' })).body.id;
@@ -110,7 +110,7 @@ r = await call('GET', '/reports?from=2000-01-01&to=2026-01-01');
 check('período longo demais -> 400', r.status === 400, r.body);
 
 // ---- isolamento ----
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `or${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `or${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = outro.body.token;
 r = await call('GET', '/reports?from=2026-03-01&to=2026-04-30');
 check('cada um vê só os próprios números', r.body.resumo.saidas === 0 && r.body.resumo.lancamentos === 0, r.body.resumo);

@@ -15,7 +15,7 @@ const check = (name, cond, extra) => {
   if (!cond) fails++;
 };
 
-const reg = await call('POST', '/auth/register', { name: 'Contas', email: `ct${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Contas', email: `ct${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const cats = (await call('GET', '/categories')).body;
 const alim = cats.find((c) => c.name === 'Alimentação').id;
@@ -125,7 +125,7 @@ check('cartão com lançamentos não é excluído', r.status === 409, r.body);
 
 // --- isolamento entre usuários ---
 const t1 = token;
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `o${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `o${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = outro.body.token;
 r = await call('PUT', `/accounts/${carteira}`, { name: 'Roubada', kind: 'corrente' });
 check('não edita conta de outro usuário', r.status === 404, r.body);

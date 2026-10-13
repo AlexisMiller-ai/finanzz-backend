@@ -23,7 +23,7 @@ const mes = (delta) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
-const reg = await call('POST', '/auth/register', { name: 'Pend', email: `pd${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Pend', email: `pd${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const conta = (await call('GET', '/accounts')).body[0].id;
 await call('PUT', `/accounts/${conta}/balance`, { current_balance: 1000 });
@@ -169,7 +169,7 @@ check('e ele sai da lista de pendentes', !r.body.some((t) => t.id === freela), r
 
 // ---- isolamento por usuário ----
 const t1 = token;
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `op${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `op${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = outro.body.token;
 r = await call('PUT', `/transactions/${luz}/settle`, { settled: true });
 check('não dá baixa em lançamento de outro usuário', r.status === 404, r.body);
