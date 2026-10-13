@@ -24,11 +24,11 @@ const mes = (delta) => {
 // Mesma regra do backend: do dia de fechamento em diante, a fatura aberta é a do mês seguinte.
 const faturaAberta = (fechamento) => (fechamento && diaHoje >= fechamento ? mes(1) : mes(0));
 
-const reg = await call('POST', '/auth/register', { name: 'Fat', email: `fb${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Fat', email: `fb${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const conta = (await call('GET', '/accounts')).body[0].id;
 // Fechamento dia 1: a fatura aberta é sempre a do mês seguinte, em qualquer dia do mês.
-const inter = (await call('POST', '/cards', { name: 'Inter', limit_amount: 3900, closing_day: 1, due_day: 10 })).body.id;
+const inter = (await call('POST', '/cards', { name: 'Inter', limit_amount: 4200, closing_day: 1, due_day: 10 })).body.id;
 const aberta = faturaAberta(1);
 
 const gasto = (cardId, m, valor, desc) =>
@@ -38,9 +38,9 @@ const gasto = (cardId, m, valor, desc) =>
   });
 
 // Faturas antigas (já pagas na vida real), a do mês e a que está aberta.
-await gasto(inter, mes(-2), 707.88, 'Fatura de 2 meses atrás');
-await gasto(inter, mes(-1), 1641.28, 'Fatura do mês passado');
-await gasto(inter, mes(0), 1733.76, 'Fatura deste mês');
+await gasto(inter, mes(-2), 612.40, 'Fatura de 2 meses atrás');
+await gasto(inter, mes(-1), 1420.15, 'Fatura do mês passado');
+await gasto(inter, mes(0), 1534.90, 'Fatura deste mês');
 await gasto(inter, aberta, 200, 'Já caiu na fatura aberta');
 
 const getCard = async (id) => (await call('GET', `/cards?month=${mes(0)}`)).body.find((c) => c.id === id);
@@ -51,9 +51,10 @@ let card = await getCard(inter);
 check('mês da fatura aberta segue o fechamento', card.openBillMonth === aberta, card);
 check('fatura aberta traz só o que já caiu nela', card.openBillTotal === 200, card);
 check('fechamento e vencimento da fatura aberta', card.openBillClosingDate === `${aberta}-01` && card.openBillDueDate === `${aberta}-10`, card);
-const fechadas = 707.88 + 1641.28 + 1733.76;
+// Soma em centavos: em ponto flutuante 612.40 + 1420.15 + 1534.90 não dá exatamente 3567.45.
+const fechadas = (61240 + 142015 + 153490) / 100;
 check('dívida fechada soma as faturas que fecharam', card.closedDue === fechadas, card);
-check('em aberto = fechadas + fatura aberta', card.outstanding === fechadas + 200, card);
+check('em aberto = fechadas + fatura aberta', card.outstanding === (61240 + 142015 + 153490 + 20000) / 100, card);
 check('conta quantas faturas fechadas estão sem baixa', card.closedUnpaidCount === 3, card);
 check('nada de parcela futura ainda', card.futureInstallments === 0, card);
 
@@ -62,16 +63,16 @@ check('lista de faturas vem da mais nova para a mais antiga', bills.bills[0].mon
 check('fatura do mês seguinte está aberta', bills.bills[0].status === 'aberta', bills.bills[0]);
 check('faturas anteriores estão fechadas', bills.bills.slice(1, 4).every((b) => b.status === 'fechada'), bills.bills);
 const mesPassado = bills.bills.find((b) => b.month === mes(-1));
-check('total da fatura do mês passado', mesPassado.total === 1641.28, mesPassado);
-check('restante é o total quando não houve pagamento', mesPassado.remaining === 1641.28, mesPassado);
+check('total da fatura do mês passado', mesPassado.total === 1420.15, mesPassado);
+check('restante é o total quando não houve pagamento', mesPassado.remaining === 1420.15, mesPassado);
 check('vencimento da fatura do mês passado', mesPassado.dueDate === `${mes(-1)}-10`, mesPassado);
 check('conta os itens da fatura', mesPassado.items === 1, mesPassado);
 
 // ---- baixa sem mexer em conta (pago fora do app) ----
 let r = await call('POST', `/cards/${inter}/bills/${mes(-1)}/pay`, { kind: 'externo' });
-check('baixa externa aceita e usa o valor da fatura', r.status === 201 && r.body.amount === 1641.28, r.body);
+check('baixa externa aceita e usa o valor da fatura', r.status === 201 && r.body.amount === 1420.15, r.body);
 card = await getCard(inter);
-check('dívida fechada cai o valor da fatura paga', card.closedDue === Math.round((fechadas - 1641.28) * 100) / 100, card);
+check('dívida fechada cai o valor da fatura paga', card.closedDue === Math.round((fechadas - 1420.15) * 100) / 100, card);
 check('uma fatura fechada a menos sem baixa', card.closedUnpaidCount === 2, card);
 bills = await getBills(inter);
 check('fatura aparece como paga', bills.bills.find((b) => b.month === mes(-1)).status === 'paga', bills.bills);
@@ -85,27 +86,27 @@ const saldoAntes = (await call('GET', '/accounts')).body.find((a) => a.id === co
 r = await call('POST', `/cards/${inter}/bills/${mes(0)}/pay`, { kind: 'transferencia', from_account_id: conta });
 check('baixa com pagamento cria a transferência', r.status === 201 && !!r.body.transferId, r.body);
 const saldoDepois = (await call('GET', '/accounts')).body.find((a) => a.id === conta).balance;
-check('o dinheiro sai da conta escolhida', Math.round((saldoAntes - saldoDepois) * 100) / 100 === 1733.76, { saldoAntes, saldoDepois });
+check('o dinheiro sai da conta escolhida', Math.round((saldoAntes - saldoDepois) * 100) / 100 === 1534.90, { saldoAntes, saldoDepois });
 card = await getCard(inter);
-check('dívida fechada zera sem descontar duas vezes', card.closedDue === 707.88, card);
-check('em aberto fica só com a fatura aberta e o que falta', card.outstanding === 907.88, card);
+check('dívida fechada zera sem descontar duas vezes', card.closedDue === 612.40, card);
+check('em aberto fica só com a fatura aberta e o que falta', card.outstanding === 812.40, card);
 bills = await getBills(inter);
 const paga = bills.bills.find((b) => b.month === mes(0));
-check('fatura paga por transferência mostra o pagamento lançado', paga.credits === 1733.76 && paga.payment.kind === 'transferencia', paga);
+check('fatura paga por transferência mostra o pagamento lançado', paga.credits === 1534.90 && paga.payment.kind === 'transferencia', paga);
 check('pagamento da fatura não conta como receita do mês', (await call('GET', `/dashboard/summary?month=${mes(0)}`)).body.entradasPeriodo === 0, null);
 
 // ---- desfazer a baixa ----
 r = await call('DELETE', `/cards/${inter}/bills/${mes(0)}/pay`);
 check('desfaz a baixa e remove as duas pontas da transferência', r.status === 200 && r.body.transferRemoved === 2, r.body);
 card = await getCard(inter);
-check('dívida volta ao que era', card.closedDue === Math.round((fechadas - 1641.28) * 100) / 100, card);
+check('dívida volta ao que era', card.closedDue === Math.round((fechadas - 1420.15) * 100) / 100, card);
 const saldoVolta = (await call('GET', '/accounts')).body.find((a) => a.id === conta).balance;
 check('saldo da conta volta ao que era', saldoVolta === saldoAntes, { saldoAntes, saldoVolta });
 r = await call('DELETE', `/cards/${inter}/bills/${mes(0)}/pay`);
 check('desfazer fatura sem baixa -> 404', r.status === 404, r.body);
 
 // ---- baixa em tudo que já fechou, com ajuste manual antigo ----
-await call('PUT', `/cards/${inter}/outstanding`, { current_outstanding: 2641.64 });
+await call('PUT', `/cards/${inter}/outstanding`, { current_outstanding: 2347.30 });
 r = await call('POST', `/cards/${inter}/bills/settle-past`);
 check('dá baixa nas faturas fechadas que faltavam', r.status === 200 && r.body.settled === 2, r.body);
 card = await getCard(inter);
@@ -134,7 +135,7 @@ const antiga = (await call('GET', `/transactions?month=${mes(-2)}`)).body[0];
 r = await call('POST', '/transactions/move', { ids: [antiga.id], card_id: nubank });
 check('move a compra antiga para o Nubank', r.body.moved === 1, r.body);
 card = await getCard(nubank);
-check('a compra antiga aparece como fatura fechada a pagar', card.closedDue === 707.88 && card.closedUnpaidCount === 1, card);
+check('a compra antiga aparece como fatura fechada a pagar', card.closedDue === 612.40 && card.closedUnpaidCount === 1, card);
 r = await call('POST', `/cards/${nubank}/bills/settle-past`);
 check('baixa nas anteriores resolve o Nubank', r.status === 200, r.body);
 card = await getCard(nubank);
@@ -168,7 +169,7 @@ r = await call('GET', `/cards/999999/bills`);
 check('faturas de cartão inexistente -> 404', r.status === 404, r.body);
 
 const t1 = token;
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `ob${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `ob${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = outro.body.token;
 r = await call('GET', `/cards/${inter}/bills`);
 check('não lê faturas de cartão de outro usuário', r.status === 404, r.body);

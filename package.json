@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "migrate": "ts-node-dev --transpile-only scripts/migrate.ts",
+    "migrate": "tsx scripts/migrate.ts",
     "test": "node tests/run.mjs"
   },
   "keywords": [],
@@ -30,8 +30,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.1.1",
     "@types/pg": "^8.20.0",
-    "@vercel/node": "^3.2.24",
     "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0"
+    "tsx": "^4.23.15"
   }
 }

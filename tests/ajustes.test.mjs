@@ -18,7 +18,7 @@ const hoje = new Date();
 const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
 const mesSeguinte = () => { const d = new Date(hoje.getFullYear(), hoje.getMonth() + 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 
-const reg = await call('POST', '/auth/register', { name: 'Aju', email: `aj${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Aju', email: `aj${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const principal = (await call('GET', '/accounts')).body[0].id;
 const inter = (await call('POST', '/accounts', { name: 'Inter', kind: 'corrente' })).body.id;
@@ -103,7 +103,7 @@ r = await call('POST', '/transactions/move', { ids: [1], account_id: 999999 });
 check('destino inexistente -> 404', r.status === 404, r.body);
 
 const t1 = token;
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `o${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `o${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = outro.body.token;
 const contaOutro = (await call('GET', '/accounts')).body[0].id;
 r = await call('POST', '/transactions/move', { ids: doPrincipal, account_id: contaOutro });

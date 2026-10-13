@@ -50,6 +50,9 @@ function subirApi() {
       NODE_ENV: "test",
       TZ: FUSO,
       DOTENV_CONFIG_QUIET: "true",
+      // As suítes criam dezenas de usuários a partir do mesmo IP; o limite de
+      // cadastro em si é testado em seguranca.test.mjs, com IPs próprios.
+      REGISTER_MAX_PER_IP: "50",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

@@ -15,7 +15,7 @@ const check = (name, cond, extra) => {
   if (!cond) fails++;
 };
 
-const reg = await call('POST', '/auth/register', { name: 'Import', email: `imp${Date.now()}@t.com`, password: '123456' });
+const reg = await call('POST', '/auth/register', { name: 'Import', email: `imp${Date.now()}@t.com`, password: 'senha-teste-123' });
 token = reg.body.token;
 const cats = (await call('GET', '/categories')).body;
 const food = cats.find((c) => c.name === 'Alimentação').id;
@@ -98,7 +98,7 @@ r = await call('POST', '/transactions/import', { transactions: Array.from({ leng
 check('acima de 500 -> 400', r.status === 400, r);
 
 // 10) isolamento entre usuários
-const outro = await call('POST', '/auth/register', { name: 'Outro', email: `out${Date.now()}@t.com`, password: '123456' });
+const outro = await call('POST', '/auth/register', { name: 'Outro', email: `out${Date.now()}@t.com`, password: 'senha-teste-123' });
 const t1 = token; token = outro.body.token;
 r = await call('POST', '/transactions/import', { transactions: [{ date: '2026-09-02', amount: 120.5, type: 'despesa', description: 'MERCADO BOM PRECO', external_id: 'ofx:A1' }] });
 check('mesmo external_id de outro usuário é permitido', r.body.imported === 1, r.body);

@@ -16,11 +16,11 @@ const check = (name, cond, extra) => {
 };
 
 // auth
-let r = await call('POST', '/auth/register', { name: 'Reg', email: `  Reg${Date.now()}@Mail.com `, password: '123456' });
+let r = await call('POST', '/auth/register', { name: 'Reg', email: `  Reg${Date.now()}@Mail.com `, password: 'senha-teste-123' });
 check('registro normaliza e-mail', r.status === 201 && r.body.user.email === r.body.user.email.toLowerCase(), r.body);
 token = r.body.token;
 const email = r.body.user.email;
-check('login case-insensitive', (await call('POST', '/auth/login', { email: email.toUpperCase(), password: '123456' })).status === 200);
+check('login case-insensitive', (await call('POST', '/auth/login', { email: email.toUpperCase(), password: 'senha-teste-123' })).status === 200);
 
 const cats = (await call('GET', '/categories')).body;
 const alim = cats.find((c) => c.name === 'Alimentação').id;
@@ -88,8 +88,9 @@ check('lançamentos da categoria excluída ficam sem categoria', r.body.every((t
 
 // perfil e erros
 check('perfil atualizado', (await call('PUT', '/auth/me', { name: 'Novo Nome' })).body.name === 'Novo Nome');
-check('senha errada recusada', (await call('PUT', '/auth/password', { current_password: 'x', new_password: 'abcdef' })).status === 400);
-check('senha alterada', (await call('PUT', '/auth/password', { current_password: '123456', new_password: 'abcdef' })).status === 204);
+check('senha errada recusada', (await call('PUT', '/auth/password', { current_password: 'x', new_password: 'nova-senha-456' })).status === 400);
+r = await call('PUT', '/auth/password', { current_password: 'senha-teste-123', new_password: 'nova-senha-456' });
+check('senha alterada devolve um token novo', r.status === 200 && typeof r.body.token === 'string', r.body);
 check('rota inexistente em JSON', (await call('GET', '/nao-existe')).body.status === 'error');
 check('keep-alive grava', (await call('GET', '/keep-alive?source=regressao')).body.pingCount >= 1);
 
