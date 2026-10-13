@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "typecheck": "tsc --noEmit",
-    "migrate": "ts-node-dev --transpile-only scripts/migrate.ts"
+    "migrate": "ts-node-dev --transpile-only scripts/migrate.ts",
+    "test": "node tests/run.mjs"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +22,8 @@
     "typescript": "^5.7.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.9",
+    "@electric-sql/pglite-socket": "^0.2.12",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -28,6 +31,7 @@
     "@types/node": "^26.1.1",
     "@types/pg": "^8.20.0",
     "@vercel/node": "^3.2.24",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0"
   }
 }

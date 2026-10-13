@@ -105,3 +105,13 @@ curl -H "Authorization: Bearer $CRON_SECRET" "https://finanzz-backend.vercel.app
 ```
 
 A resposta traz `daysSincePreviousPing`: se esse número se aproximar de 7, algum agendador parou de rodar. O GitHub também desativa agendamentos em repositórios sem commits por 60 dias (avisa por e-mail; basta reativar na aba Actions).
+
+## Testes
+
+```bash
+npm test
+```
+
+Sobe um Postgres em memória (PGlite) com `db/schema.sql` e todas as migrations, liga a API apontando para ele e roda as suítes de `tests/*.test.mjs` contra a API — cadastro, lançamentos, parcelas, contas e cartões, transferências, faturas, importação, conciliação, contas a pagar, orçamentos e relatórios. Nada toca o banco de produção. `npm test -- faturas` roda só as suítes com "faturas" no nome.
+
+O GitHub Actions (`.github/workflows/ci.yml`) roda a checagem de tipos e os testes em todo PR e em todo push na `main`.
