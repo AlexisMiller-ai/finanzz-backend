@@ -69,6 +69,9 @@ app.use(
     if (error.type === "entity.parse.failed") {
       return sendError(res, 400, "JSON inválido");
     }
+    if (error.type === "entity.too.large") {
+      return sendError(res, 413, "O conteúdo enviado é grande demais");
+    }
     console.error(error);
     sendError(res, 500, "Erro interno");
   },

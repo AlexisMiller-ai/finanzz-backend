@@ -12,6 +12,7 @@ import {
   registrarTentativa,
 } from "../services/rateLimit";
 import { cleanText, sendError } from "../utils/validation";
+import { validateAvatar } from "../utils/avatar";
 
 const DEFAULT_CATEGORIES = [
   { name: "Alimentação", type: "despesa", color: "#EF4444" },
@@ -128,7 +129,7 @@ export const login = async (req: Request, res: Response) => {
     if (espera) return bloqueado(res, espera);
 
     const result = await pool.query(
-      "SELECT id, name, email, password_hash FROM users WHERE LOWER(email) = $1",
+      "SELECT id, name, email, avatar, password_hash FROM users WHERE LOWER(email) = $1",
       [email],
     );
     const user = result.rows[0];
@@ -141,7 +142,7 @@ export const login = async (req: Request, res: Response) => {
 
     await limparTentativas(chaveEmail);
     res.json({
-      user: { id: user.id, name: user.name, email: user.email },
+      user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar },
       token: generateToken(user.id),
     });
   } catch (error) {
@@ -153,7 +154,7 @@ export const login = async (req: Request, res: Response) => {
 export const me = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
-      "SELECT id, name, email FROM users WHERE id = $1",
+      "SELECT id, name, email, avatar FROM users WHERE id = $1",
       [req.userId],
     );
     if (result.rows.length === 0) {
@@ -174,7 +175,7 @@ export const updateProfile = async (req: AuthRequest, res: Response) => {
 
   try {
     const result = await pool.query(
-      "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email",
+      "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email, avatar",
       [name, req.userId],
     );
     if (result.rows.length === 0) {
@@ -184,6 +185,38 @@ export const updateProfile = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error(error);
     sendError(res, 500, "Erro ao atualizar perfil");
+  }
+};
+
+/** Troca a foto de perfil. O app já envia a imagem reduzida para 256x256. */
+export const updateAvatar = async (req: AuthRequest, res: Response) => {
+  const checked = validateAvatar(req.body?.image);
+  if (!checked.ok) return sendError(res, 400, checked.message);
+
+  try {
+    const result = await pool.query(
+      "UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id, name, email, avatar",
+      [checked.value, req.userId],
+    );
+    if (result.rows.length === 0) return sendError(res, 404, "Usuário não encontrado");
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao salvar a foto");
+  }
+};
+
+export const removeAvatar = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await pool.query(
+      "UPDATE users SET avatar = NULL WHERE id = $1 RETURNING id, name, email, avatar",
+      [req.userId],
+    );
+    if (result.rows.length === 0) return sendError(res, 404, "Usuário não encontrado");
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao remover a foto");
   }
 };
 
