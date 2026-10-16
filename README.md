@@ -64,7 +64,7 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 | POST | `/budgets/copy` | Copia orçamentos de `from_month` para `to_month` |
 | DELETE | `/budgets/:id` | Exclui orçamento |
 | GET/POST | `/keep-alive` | Registra atividade no banco (ver "Manter o banco ativo") |
-| GET/POST | `/goals` | Meta de economia do mês (`savings_goal: 0` remove) |
+| GET/POST | `/goals` | Meta de economia valendo no mês; definir vale a partir dali (`savings_goal: 0` encerra) |
 | PUT | `/savings` | Ajusta o total guardado para `manual_total` |
 
 ## Regras de negócio
@@ -77,6 +77,7 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 - **Contas e cartões**: todo lançamento fica numa conta **ou** num cartão (restrição no banco garante que nunca nos dois). Despesa no crédito vai para o cartão; o resto, para a conta. Sem escolha explícita, usa a primeira conta/cartão do usuário e cria uma se não houver nenhuma.
 - **Saldo da conta** = saldo inicial + entradas − saídas, considerando só lançamentos até hoje (parcelas e agendamentos futuros não mexem no saldo de agora). `PUT /accounts/:id/balance` faz o caminho inverso: recebe o saldo real de hoje e deduz o inicial.
 - **Orçamento recorrente**: uma linha em `budgets` significa "a partir deste mês, o limite é X" e vale para os meses seguintes até existir outra linha da mesma categoria; `active = false` encerra a partir daquele mês sem apagar o histórico. Mudanças com `scope: "so_este_mes"` gravam também o mês seguinte com o valor anterior, para não vazar. Cada orçamento devolve a média dos 3 meses anteriores, a projeção do mês corrente no ritmo atual e um `pace` (`ok`, `atencao`, `vai_estourar`, `estourou`).
+- **Plano do mês**: a meta de economia (`monthly_goals`) é recorrente, igual aos orçamentos — a definida num mês vale nos seguintes até existir outra, e uma linha com 0 encerra a partir daquele mês (o histórico anterior continua). O limite de gasto não é guardado: é sempre entradas do mês − meta.
 - **Relatório** (`/reports`): recebe um período livre (padrão: últimos 6 meses) e devolve totais, categorias com média mensal e variação contra o **período anterior de mesmo tamanho**, linha do tempo (por semana até ~3 meses, por mês acima disso) e os maiores gastos. Transferências ficam de fora; pendentes entram nos totais e são informados à parte.
 - **Pendência** (`settled`): um lançamento nasce efetivado, salvo quando o formulário manda `settled: false` — aí é conta a pagar (despesa) ou a receber (receita). O que está pendente fica fora do saldo da conta e do total guardado, mesmo com a data já vencida; os totais do mês continuam somando tudo, porque são o resultado do mês. Parcelas e repetições a partir da segunda nascem pendentes. Compra no cartão e transferência não têm pendência própria (restrição no banco garante): no cartão quem recebe baixa é a fatura, e transferência é dinheiro que já mudou de lugar.
 - **Fatura aberta**: a partir do dia de fechamento, a compra já entra na fatura do mês seguinte — é a mesma regra do formulário de lançamento. `openBillMonth` é a fatura que ainda recebe compras; o que vem depois dela é parcela futura (`futureInstallments`).

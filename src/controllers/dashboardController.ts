@@ -6,6 +6,7 @@ import {
   getCalculatedSavings,
   getSavingsAdjustment,
 } from "../services/savings";
+import { getSavingsGoal } from "../services/plan";
 import { parseMonth, sendError } from "../utils/validation";
 
 const INVALID_MONTH = 'Parâmetro "month" é obrigatório (ex: 2026-06)';
@@ -15,7 +16,7 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
   if (!monthStart) return sendError(res, 400, INVALID_MONTH);
 
   try {
-    const [periodResult, previousResult, goalResult, calculated, adjustment] =
+    const [periodResult, previousResult, goal, calculated, adjustment] =
       await Promise.all([
         pool.query(
           `SELECT
@@ -37,10 +38,7 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
              AND date >= ($2::date - INTERVAL '1 month') AND date < $2::date`,
           [req.userId, monthStart],
         ),
-        pool.query(
-          "SELECT savings_goal FROM monthly_goals WHERE user_id = $1 AND month_ref = $2::date",
-          [req.userId, monthStart],
-        ),
+        getSavingsGoal(req.userId, monthStart),
         getCalculatedSavings(req.userId),
         getSavingsAdjustment(req.userId),
       ]);
@@ -50,9 +48,7 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
     const saidas = parseFloat(period.saidas);
     const saldoPeriodo = entradas - saidas;
     const taxaEconomia = entradas > 0 ? (saldoPeriodo / entradas) * 100 : 0;
-    const savingsGoal = goalResult.rows[0]
-      ? parseFloat(goalResult.rows[0].savings_goal)
-      : 0;
+    const savingsGoal = goal.goal;
 
     res.json({
       saldoGeralAcumulado: calculated + adjustment,
@@ -62,6 +58,7 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
       saldoPeriodo,
       taxaEconomia: parseFloat(taxaEconomia.toFixed(1)),
       savingsGoal,
+      savingsGoalFromMonth: goal.fromMonth,
       availableToSpend: entradas - savingsGoal - saidas,
       cartaoCreditoPeriodo: parseFloat(period.cartao),
       quantidadeLancamentos: period.quantidade,

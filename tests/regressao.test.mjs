@@ -71,7 +71,7 @@ check('orçamento calcula o gasto', bud[0].spent === 200 && bud[0].percentageUse
 check('orçamento em receita recusado', (await call('POST', '/budgets', { category_id: salario, month_ref: '2026-09-01', limit_amount: 10 })).status === 400);
 check('cópia de orçamentos', (await call('POST', '/budgets/copy', { from_month: '2026-09', to_month: '2026-10' })).body.copied === 1);
 check('meta salva', (await call('POST', '/goals', { month_ref: '2026-09-01', savings_goal: 1000 })).status === 201);
-check('meta zero remove', (await call('POST', '/goals', { month_ref: '2026-09-01', savings_goal: 0 })).status === 200);
+check('meta zero encerra', (await call('POST', '/goals', { month_ref: '2026-09-01', savings_goal: 0 })).status === 201);
 
 // total guardado
 r = await call('PUT', '/savings', { manual_total: 10000 });
