@@ -72,7 +72,7 @@ Todas as rotas, exceto `/auth/register`, `/auth/login` e `/health`, exigem `Auth
 - Valores são validados e convertidos em centavos; parcelas somam exatamente o total (a diferença de centavos vai para a última).
 - Datas mensais respeitam o fim do mês (31/01 + 1 mês = 28/02).
 - Lançamentos de cartão: `date` = 1º dia do mês da fatura, `purchase_date` = data da compra.
-- **Total guardado** = entradas − saídas desde `SAVINGS_START_DATE` (`src/services/savings.ts`) **até hoje**, mais o ajuste manual. Parcelas e lançamentos futuros só entram quando a data chega.
+- **Total guardado** = entradas − saídas desde o início da contagem **até hoje**, mais o ajuste manual. O início é, por usuário, a data escolhida no ajuste ou, sem escolha, o primeiro lançamento (`users.savings_start_date`, `src/services/savings.ts`). Parcelas, lançamentos futuros e pendentes só entram quando acontecem.
 - **Importação**: cada linha guarda um `external_id` (FITID do OFX ou hash da linha do CSV). Um índice único por usuário impede reimportar o mesmo arquivo; sem esse identificador, a comparação é por data + valor + tipo + descrição, contando ocorrências (duas compras iguais no mesmo dia continuam sendo duas).
 - **Contas e cartões**: todo lançamento fica numa conta **ou** num cartão (restrição no banco garante que nunca nos dois). Despesa no crédito vai para o cartão; o resto, para a conta. Sem escolha explícita, usa a primeira conta/cartão do usuário e cria uma se não houver nenhuma.
 - **Saldo da conta** = saldo inicial + entradas − saídas, considerando só lançamentos até hoje (parcelas e agendamentos futuros não mexem no saldo de agora). `PUT /accounts/:id/balance` faz o caminho inverso: recebe o saldo real de hoje e deduz o inicial.

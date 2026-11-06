@@ -258,3 +258,47 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
     sendError(res, 500, "Erro ao alterar senha");
   }
 };
+
+/**
+ * Exclui a conta e tudo que pertence a ela (direito de eliminação da LGPD).
+ * Pede a senha de novo: uma sessão aberta num aparelho esquecido não basta
+ * para apagar tudo. A ordem respeita as chaves estrangeiras; se alguma tabela
+ * nova com user_id for esquecida aqui, a FK impede apagar o usuário e a
+ * operação inteira é desfeita, em vez de deixar dados órfãos.
+ */
+export const deleteAccount = async (req: AuthRequest, res: Response) => {
+  const password = req.body?.password;
+  if (typeof password !== "string" || !password) {
+    return sendError(res, 400, "Confirme com a sua senha");
+  }
+
+  try {
+    const result = await pool.query("SELECT email, password_hash FROM users WHERE id = $1", [
+      req.userId,
+    ]);
+    const user = result.rows[0];
+    if (!user) return sendError(res, 404, "Usuário não encontrado");
+    if (!(await bcrypt.compare(password, user.password_hash))) {
+      return sendError(res, 400, "Senha incorreta");
+    }
+
+    await withTransaction(async (client) => {
+      const id = req.userId;
+      await client.query("DELETE FROM card_bills WHERE user_id = $1", [id]);
+      await client.query("DELETE FROM transactions WHERE user_id = $1", [id]);
+      await client.query("DELETE FROM budgets WHERE user_id = $1", [id]);
+      await client.query("DELETE FROM monthly_goals WHERE user_id = $1", [id]);
+      await client.query("DELETE FROM cards WHERE user_id = $1", [id]);
+      await client.query("DELETE FROM accounts WHERE user_id = $1", [id]);
+      await client.query("DELETE FROM categories WHERE user_id = $1", [id]);
+      // Tentativas de login guardadas pelo e-mail também são dado pessoal.
+      await client.query("DELETE FROM auth_attempts WHERE key = $1", [`login:email:${user.email}`]);
+      await client.query("DELETE FROM users WHERE id = $1", [id]);
+    });
+
+    res.status(204).send();
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, "Erro ao excluir a conta");
+  }
+};
