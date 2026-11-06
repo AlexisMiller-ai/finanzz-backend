@@ -2,9 +2,9 @@ import { Response } from "express";
 import { pool } from "../config/db";
 import { AuthRequest } from "../middleware/auth";
 import {
-  SAVINGS_START_DATE,
   getCalculatedSavings,
   getSavingsAdjustment,
+  getSavingsStart,
 } from "../services/savings";
 import { getSavingsGoal } from "../services/plan";
 import { parseMonth, sendError } from "../utils/validation";
@@ -16,7 +16,7 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
   if (!monthStart) return sendError(res, 400, INVALID_MONTH);
 
   try {
-    const [periodResult, previousResult, goal, calculated, adjustment] =
+    const [periodResult, previousResult, goal, calculated, adjustment, inicio] =
       await Promise.all([
         pool.query(
           `SELECT
@@ -41,6 +41,7 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
         getSavingsGoal(req.userId, monthStart),
         getCalculatedSavings(req.userId),
         getSavingsAdjustment(req.userId),
+        getSavingsStart(req.userId),
       ]);
 
     const period = periodResult.rows[0];
@@ -52,7 +53,10 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
 
     res.json({
       saldoGeralAcumulado: calculated + adjustment,
-      savingsStartDate: SAVINGS_START_DATE,
+      // null quando ainda não há lançamentos.
+      savingsStartDate: inicio.inicio,
+      // true quando o usuário escolheu a data; false = desde o primeiro lançamento.
+      savingsStartChosen: inicio.escolhido !== null,
       entradasPeriodo: entradas,
       saidasPeriodo: saidas,
       saldoPeriodo,

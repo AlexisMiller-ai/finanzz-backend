@@ -5,6 +5,7 @@ import {
   me,
   updateProfile,
   changePassword,
+  deleteAccount,
   updateAvatar,
   removeAvatar,
 } from "../controllers/authController";
@@ -16,6 +17,7 @@ router.post("/register", register);
 router.post("/login", login);
 router.get("/me", authenticate, me);
 router.put("/me", authenticate, updateProfile);
+router.delete("/me", authenticate, deleteAccount); // body.password confirma
 router.put("/password", authenticate, changePassword);
 router.put("/avatar", authenticate, updateAvatar);
 router.delete("/avatar", authenticate, removeAvatar);
